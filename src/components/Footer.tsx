@@ -3,7 +3,7 @@ export const Footer = () => {
     <footer>
         <p className="text-center text-gray-600 py-10 text-lg">
           &copy; {new Date().getFullYear()} {" | "}
-          <a href="https://github.com/rody-huancas/" target="_blank" className="text-indigo-600 font-medium uppercase underline">Rody Huancas</a> 
+          <a href="#" target="_blank" className="text-indigo-600 font-medium uppercase underline">OUR MOBILE MECHANIC</a>
         </p>
     </footer>
   )

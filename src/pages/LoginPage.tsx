@@ -18,7 +18,7 @@ export const LoginPage = () => {
       await loginUser(email, password);
       navigate("/");
     } catch (error) {
-      console.log("No se pudo autenticar");
+      console.log("Authentication failed.");
     }
   };
 
@@ -33,11 +33,11 @@ export const LoginPage = () => {
   return (
     <>
       <h2 className="text-xl md:text-2xl font-bold leading-tight mt-12 text-gray-600 uppercase">
-        Inicia Sesión
+        Log In.
       </h2>
       <form className="mt-6" onSubmit={handleSubmit}>
         <div>
-          <label className="block text-gray-700">Correo Electrónico</label>
+          <label className="block text-gray-700">Email.</label>
           <input
             type="email"
             placeholder="correo@correo.com"
@@ -48,7 +48,7 @@ export const LoginPage = () => {
           />
         </div>
         <div className="mt-4">
-          <label className="block text-gray-700">Contraseña</label>
+          <label className="block text-gray-700">Password</label>
           <input
             type="password"
             placeholder="**************"
@@ -61,13 +61,13 @@ export const LoginPage = () => {
           />
         </div>
         <p className="mt-2 text-gray-500">
-          ¿No tienes una cuenta? <Link to={"register"} className="text-indigo-600 underline">Crear Cuenta</Link>
+          Don't have an account? <Link to={"register"} className="text-indigo-600 underline">Create Account</Link>
         </p>
         <button
           type="submit"
           className="w-full block bg-indigo-500 hover:bg-indigo-400 text-white font-semibold rounded-lg px-4 py-3 mt-6"
         >
-          Acceder
+          Access
         </button>
       </form>
     </>

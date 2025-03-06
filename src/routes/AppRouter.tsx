@@ -5,9 +5,11 @@ import { HomePage } from "../pages/HomePage";
 import { AdminLayout } from "../layouts/AdminLayout";
 import { NewProduct } from "../pages/NewProduct";
 import { RegisterUser } from "../pages/RegisterUser";
-import { EditProduct } from "../pages/EditProduct";
+import { CheckAddress } from "../pages/CheckAddress";
+import {ThankYou} from "../pages/ThankYou.tsx";
 
 export const AppRouter = () => {
+
   return (
     <BrowserRouter>
       <Routes>
@@ -18,8 +20,9 @@ export const AppRouter = () => {
 
         <Route path="/" element={<AdminLayout />}>
           <Route index element={<HomePage />} />
-          <Route path="new-product" element={<NewProduct />} />
-          <Route path="edit-product/:id" element={<EditProduct />} />
+          <Route path="thank-you" element={<ThankYou />} />
+          <Route path="new-car" element={<NewProduct />} />
+          <Route path="add-address" element={<CheckAddress />} />
         </Route>
       </Routes>
     </BrowserRouter>

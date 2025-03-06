@@ -1,13 +1,24 @@
 export interface LoginResponse {
-  _id: string;
-  email: string;
-  name: string;
-  token: string;
+    responseObject: {
+        user: {
+            id: string;
+            firstName: string;
+            lastName: string;
+            phone: string;
+            email: string;
+            role: string;
+            updatedAt: string;
+            zipCode: string;
+            createdAt: string;
+        }
+        token: string;
+    }
 }
 
 export interface RegisterUser {
-  name: string;
-  description?: string;
-  email: string;
-  password: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    email: string;
+    password: string;
 }

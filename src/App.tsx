@@ -2,6 +2,7 @@ import { Toaster } from "sonner";
 import { AppRouter } from "./routes/AppRouter";
 
 const App = () => {
+
   return (
     <>
       <AppRouter />

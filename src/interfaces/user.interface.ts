@@ -1,5 +1,15 @@
 export interface User {
-  _id: string;
-  email: string;
-  name: string;
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    role: string;
+    createdAt: string;
+    updatedAt: string;
+    zipCode: string;
+}
+
+export interface ProfileResponse {
+    responseObject: User ;
 }
