@@ -1,8 +1,8 @@
 import { formatDate } from "../helpers/helpers";
-import {useCarStore, useJobStore} from "../stores";
-import {Car as CarObj} from "../interfaces/car.interface.ts";
+import { useCarStore, useJobStore } from "../stores";
+import { Car as CarObj } from "../interfaces/car.interface.ts";
 
-export const Car= ({item}: {item: CarObj}) => {
+export const Car = ({ item }: { item: CarObj }) => {
   const deleteCar = useCarStore(state => state.deleteCar);
   const selectCar = useJobStore(state => state.selectCar);
 
@@ -29,10 +29,6 @@ export const Car= ({item}: {item: CarObj}) => {
 
           <p className="text-gray-700 font-bold px-3 py-1.5 rounded-xl text-center">
             Tec Doc K Type: <span className="font-normal capitalize text-gray-900">{item.tecDocKType}</span>
-          </p>
-
-          <p className="text-gray-700 font-bold px-3 py-1.5 rounded-xl text-center">
-            Mot expiry date: <span className="font-normal capitalize text-gray-900">{item.motExpiryDate}</span>
           </p>
 
           <p className="text-gray-700 font-bold px-3 py-1.5 rounded-xl text-center">

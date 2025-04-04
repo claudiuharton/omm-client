@@ -1,6 +1,6 @@
 import { AxiosError } from "axios";
 import { configApi } from "../api/configApi";
-import {Car, CarResponse} from "../interfaces";
+import { Car, CarResponse } from "../interfaces";
 
 export class CarService {
   static getAllCars = async (): Promise<CarResponse> => {
@@ -31,7 +31,7 @@ export class CarService {
     }
   };
 
-  static createCar = async (item: { carNumber: string }): Promise<CarResponse> => {
+  static createCar = async (item: { vrm: string }): Promise<CarResponse> => {
     try {
       const { data } = await configApi.post<CarResponse>("/api/cars", item);
       return data;
@@ -59,7 +59,7 @@ export class CarService {
 
   static updateCar = async (id: string | undefined, item: Car): Promise<CarResponse> => {
     try {
-      const { data } = await configApi.put<CarResponse>(`/api/cars/${id}`, {carNumber: item.carNumber, make: item.make, model: item.model});
+      const { data } = await configApi.put<CarResponse>(`/api/cars/${id}`, { carNumber: item.carNumber, make: item.make, model: item.model });
       return data;
     } catch (error) {
       if (error instanceof AxiosError) {

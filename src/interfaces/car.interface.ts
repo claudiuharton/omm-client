@@ -8,7 +8,7 @@ export interface Car {
     "bookings": [],
     "engineSize": string,
     "dateOfManufacture": string,
-    "motExpiryDate": string,
+    "motExpiryDate"?: string,
     "tecDocKType": string,
     "vin": string,
 
