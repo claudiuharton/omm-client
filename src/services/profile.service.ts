@@ -1,7 +1,7 @@
-import {AxiosError} from "axios";
-import {configApi} from "../api/configApi";
-import {LoginResponse, ProfileResponse, } from "../interfaces";
-import {useAuthStore} from "../stores";
+import { AxiosError } from "axios";
+import { configApi } from "../api/configApi";
+import { LoginResponse, ProfileResponse, } from "../interfaces";
+import { useAuthStore } from "../stores";
 
 export class ProfileService {
 
@@ -10,7 +10,7 @@ export class ProfileService {
         try {
             const user = useAuthStore.getState().user;
 
-            const {data} = await configApi.put<ProfileResponse>(`/api/users/${user?.id}`, {zipCode: item});
+            const { data } = await configApi.put<ProfileResponse>(`/api/users/${user?.id}`, { zipCode: item });
             return data;
         } catch (error) {
             if (error instanceof AxiosError) {
@@ -20,11 +20,11 @@ export class ProfileService {
         }
     };
 
-    static getUser = async (): Promise<LoginResponse> => {
+    static getUser = async (signal?: AbortSignal): Promise<LoginResponse> => {
         try {
             const user = useAuthStore.getState().user;
 
-            const {data} = await configApi.get<LoginResponse>(`/api/users/${user?.id}`);
+            const { data } = await configApi.get<LoginResponse>(`/api/users/${user?.id}`, { signal });
             return data;
         } catch (error) {
             if (error instanceof AxiosError) {

@@ -3,15 +3,14 @@ import { useCarStore } from "../stores";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
-export const FormProduct = () => {
-    const carLoading = useCarStore((state) => state.carLoading);
+export const FormCar = () => {
+    const carLoading = useCarStore((state) => state.isLoading);
     const createCar = useCarStore((state) => state.createCar);
 
     const navigate = useNavigate();
 
     const [item, setItem] = useState({
-        vrm: "",
-
+        carNumber: "",
     });
 
     const handleChange = (e: FormEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -25,8 +24,8 @@ export const FormProduct = () => {
 
     const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        const { vrm } = item;
-        if ([vrm].includes(""))
+        const { carNumber } = item;
+        if ([carNumber].includes(""))
             return toast.error("All fields are mandatory.");
         try {
             await createCar(item);
@@ -37,7 +36,7 @@ export const FormProduct = () => {
     };
 
     return (
-        <div className="md:w-2/3 lg:w-1/2 bg-white p-10 shadow-lg flex flex-col gap-2 ">
+        <div className="md:w-2/3 lg:w-1/2 bg-white p-10 shadow-lg flex flex-col gap-2 mx-auto">
             <h2 className="text-gray-600 uppercase text-center text-xl font-bold">
                 Register new car
             </h2>
@@ -47,8 +46,8 @@ export const FormProduct = () => {
                         type="text"
                         className="w-full px-3 py-2 border-2 border-gray-300 rounded-md text-gray-500 outline-none"
                         placeholder="Car plate"
-                        name="vrm"
-                        value={item.vrm}
+                        name="carNumber"
+                        value={item.carNumber}
                         onChange={handleChange}
                     />
 
