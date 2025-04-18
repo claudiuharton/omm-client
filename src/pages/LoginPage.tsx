@@ -1,50 +1,123 @@
 import { FormEvent, useState } from "react";
-import { useAuthStore } from "../stores";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useAuth } from "../hooks/useAuth";
+import { useAuthStore } from "../stores";
 
 export const LoginPage = () => {
   const navigate = useNavigate();
+  const { loginUser, loading, error } = useAuth();
 
-  const [credentials, setCredentials] = useState({email: "", password: "",});
-
-  const loginUser = useAuthStore((state) => state.loginUser);
+  const [credentials, setCredentials] = useState({ email: "", password: "", });
+  const [loginStatus, setLoginStatus] = useState("");
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const { email, password } = credentials;
-    if([email, password].includes('')) return toast.error('Todos los campos son obligatarios');
+    if ([email, password].includes('')) return toast.error('All fields are required');
+
+    setLoginStatus("Attempting to login...");
     try {
-      await loginUser(email, password);
-      navigate("/");
-    } catch (error) {
-      console.log("Authentication failed.");
+      const success = await loginUser(email, password);
+      if (success) {
+        setLoginStatus("Login successful! Redirecting...");
+        toast.success("Login successful!");
+
+        // Brief delay before redirect to show success message and ensure store is updated
+        setTimeout(() => {
+          // Get current user from store
+          const currentState = useAuthStore.getState();
+          const user = currentState.user;
+
+          console.log("User role:", user?.role);
+          console.log("User zipCode:", user?.zipCode);
+
+          // Role-based redirect
+          if (user && user.role === "mechanic") {
+            console.log("Redirecting to mechanic dashboard");
+            navigate("/mechanic-dashboard");
+          } else if (user && !user.zipCode) {
+            // If user has no address, redirect to add address
+            console.log("Redirecting to add address");
+            navigate("/add-address");
+          } else {
+            // Default destination for clients with address
+            console.log("Redirecting to client dashboard");
+            navigate("/client-dashboard");
+          }
+        }, 800); // Slightly longer delay to ensure store is updated
+      } else {
+        setLoginStatus("Login failed.");
+        // Error is already handled in the useAuth hook
+      }
+    } catch (err) {
+      setLoginStatus("Login failed due to an unexpected error.");
+      toast.error("Login failed: " + (err instanceof Error ? err.message : "Unknown error"));
     }
   };
 
   const handleChange = (e: FormEvent<HTMLInputElement>) => {
     const { name, value } = e.currentTarget;
     setCredentials(prevState => ({
-        ...prevState,
-        [name]: value
+      ...prevState,
+      [name]: value
     }));
   }
+
+  const handleDemoLogin = () => {
+    setCredentials({
+      email: "demo@example.com",
+      password: "password123"
+    });
+
+    // Toast to let users know we're using demo mode
+    toast.info("Using demo credentials. Backend API is not required for demo mode.");
+  };
 
   return (
     <>
       <h2 className="text-xl md:text-2xl font-bold leading-tight mt-12 text-gray-600 uppercase">
-        Log In.
+        Log In
       </h2>
+
+      {/* Demo mode notice */}
+      <div className="mt-4 bg-blue-50 p-3 rounded-md">
+        <p className="text-blue-700 text-sm">
+          <strong>Note:</strong> You can use any email/password. The app will work in demo mode if the backend is unavailable.
+        </p>
+        <button
+          onClick={handleDemoLogin}
+          className="mt-2 text-sm bg-blue-500 hover:bg-blue-600 text-white py-1 px-3 rounded"
+        >
+          Fill Demo Credentials
+        </button>
+      </div>
+
+      {/* Login status message */}
+      {loginStatus && (
+        <div className="mt-3 text-sm font-medium text-indigo-600">
+          {loginStatus}
+        </div>
+      )}
+
+      {/* Error display */}
+      {error && (
+        <div className="mt-3 text-sm font-medium text-red-600">
+          {error}
+        </div>
+      )}
+
       <form className="mt-6" onSubmit={handleSubmit}>
         <div>
-          <label className="block text-gray-700">Email.</label>
+          <label className="block text-gray-700">Email</label>
           <input
             type="email"
-            placeholder="correo@correo.com"
+            placeholder="email@example.com"
             className="w-full px-4 py-3 rounded-lg bg-gray-200 mt-2 border focus:border-blue-500 focus:bg-white focus:outline-none"
             name="email"
             value={credentials.email}
             onChange={handleChange}
+            disabled={loading}
           />
         </div>
         <div className="mt-4">
@@ -58,16 +131,23 @@ export const LoginPage = () => {
             name="password"
             value={credentials.password}
             onChange={handleChange}
+            disabled={loading}
           />
         </div>
-        <p className="mt-2 text-gray-500">
-          Don't have an account? <Link to={"register"} className="text-indigo-600 underline">Create Account</Link>
-        </p>
+        <div className="mt-2 space-y-1">
+          <p className="text-gray-500">
+            Don't have an account? <Link to={"register"} className="text-indigo-600 underline">Create Account</Link>
+          </p>
+          <p className="text-gray-500">
+            Are you a mechanic? <Link to={"register-mechanic"} className="text-indigo-600 underline">Register as a Mechanic</Link>
+          </p>
+        </div>
         <button
           type="submit"
           className="w-full block bg-indigo-500 hover:bg-indigo-400 text-white font-semibold rounded-lg px-4 py-3 mt-6"
+          disabled={loading}
         >
-          Access
+          {loading ? 'Logging in...' : 'Log In'}
         </button>
       </form>
     </>

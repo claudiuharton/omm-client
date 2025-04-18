@@ -1,11 +1,16 @@
 export interface Job {
-    name:string,
-    duration:number,
-    searchQuery:string,
-    id:string
-
+    id: string;
+    name: string;
+    description?: string;
+    duration: number;
+    basePrice?: number;
+    category?: string;
+    createdAt?: string;
+    searchQuery?: string;
 }
 
 export interface JobResponse {
-    responseObject: [Job];
+    success?: boolean;
+    message?: string;
+    responseObject: Job[];
 }
