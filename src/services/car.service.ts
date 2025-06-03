@@ -31,7 +31,6 @@ export class CarService {
           toast.error("Authentication required to view cars.");
           throw new Error("Authentication required");
         }
-
         if (error.response?.status === 403) {
           toast.error("You don't have permission to view all cars.");
           throw new Error("Permission denied");
@@ -72,9 +71,9 @@ export class CarService {
     try {
       // Create a new axios instance with auth headers embedded
       const authApi = createAuthApi();
-
+      const requestBody = { "vrm": item.carNumber };
       // Make request with authenticated API instance
-      const { data } = await authApi.post<CarResponse>("/api/cars", item);
+      const { data } = await authApi.post<CarResponse>("/api/cars", requestBody);
       return data;
     } catch (error) {
       if (error instanceof AxiosError) {

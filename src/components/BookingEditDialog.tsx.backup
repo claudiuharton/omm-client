@@ -5,7 +5,8 @@ import { Job } from "../interfaces/job.interface";
 import { PartItem } from "../interfaces/partItem.interface";
 import { JobService } from "../services/job.service";
 import { Loader } from "./Loader";
-import { RiCloseLine, RiSaveLine, RiUserLine } from "react-icons/ri";
+import { RiCloseLine, RiAddLine, RiSaveLine, RiUserLine } from "react-icons/ri";
+import { format } from "date-fns";
 import { zipCodeRegex, allowedPostCodeRegex } from "../helpers/helpers";
 
 interface BookingEditDialogProps {
@@ -20,78 +21,17 @@ interface BookingEditDialogProps {
 /**
  * Normalize booking data to ensure all required fields are present and have the correct type
  */
-const normalizeBookingData = (booking: Booking, availableJobs?: Job[]): Booking => {
-    const normalizedBooking = { ...booking } as Booking & { parts?: PartItem[] };
+const normalizeBookingData = (booking: Booking): Booking => {
+    const normalizedBooking = { ...booking };
 
-    // Ensure arrays - handle both 'parts' and 'partItems' properties
+    // Ensure arrays
     if (!Array.isArray(normalizedBooking.jobs)) normalizedBooking.jobs = [];
-    
-    // Handle parts/partItems naming inconsistency
-    if (!Array.isArray(normalizedBooking.partItems)) {
-        if (Array.isArray(normalizedBooking.parts)) {
-            // If booking has 'parts' but not 'partItems', copy it over
-            normalizedBooking.partItems = normalizedBooking.parts;
-        } else {
-            normalizedBooking.partItems = [];
-        }
-    }
-    // Ensure 'parts' property exists for backwards compatibility
-    if (!Array.isArray(normalizedBooking.parts)) {
-        normalizedBooking.parts = normalizedBooking.partItems;
-    }
-    
+    if (!Array.isArray(normalizedBooking.partItems)) normalizedBooking.partItems = [];
     if (!Array.isArray(normalizedBooking.schedules)) normalizedBooking.schedules = [];
-    
-    // Handle jobsPrices - should be an object like partItemsPrices
-    if (Array.isArray(normalizedBooking.jobsPrices)) {
-        // Convert array format to object format for consistency
-        const jobsPricesObj: Record<string, { price: number; duration: number }> = {};
-        normalizedBooking.jobsPrices.forEach((jp: { id: string; price?: number; duration?: number }) => {
-            if (jp.id) {
-                jobsPricesObj[jp.id] = { price: jp.price || 0, duration: jp.duration || 0 };
-            }
-        });
-        normalizedBooking.jobsPrices = jobsPricesObj;
-    } else if (typeof normalizedBooking.jobsPrices !== 'object' || normalizedBooking.jobsPrices === null) {
-        normalizedBooking.jobsPrices = {};
-    }
-    
+    if (!Array.isArray(normalizedBooking.jobsPrices)) normalizedBooking.jobsPrices = [];
     if (typeof normalizedBooking.partItemsPrices !== 'object' || normalizedBooking.partItemsPrices === null || Array.isArray(normalizedBooking.partItemsPrices)) {
         normalizedBooking.partItemsPrices = {};
     }
-
-    // Debug job pricing
-    console.log('🔧 Normalizing booking - Jobs:', normalizedBooking.jobs);
-    console.log('🔧 Normalizing booking - JobsPrices before enrichment:', normalizedBooking.jobsPrices);
-
-    // Enrich jobs with pricePerHour from available jobs if not present
-    if (availableJobs && availableJobs.length > 0) {
-        normalizedBooking.jobs = normalizedBooking.jobs.map(job => {
-            if (!job.pricePerHour) {
-                const availableJob = availableJobs.find(aj => aj.id === job.id);
-                if (availableJob && availableJob.pricePerHour) {
-                    return { ...job, pricePerHour: availableJob.pricePerHour };
-                }
-            }
-            return job;
-        });
-    }
-
-    // Calculate job prices if not present in jobsPrices or if the job has pricing info
-    normalizedBooking.jobs.forEach(job => {
-        if (job.pricePerHour && job.duration) {
-            const totalJobPrice = (job.pricePerHour * job.duration) / 60;
-            // Always recalculate to ensure accuracy
-            normalizedBooking.jobsPrices[job.id] = { 
-                price: totalJobPrice, 
-                duration: job.duration 
-            };
-            console.log(`🔧 Calculated price for job ${job.id} (${job.name}): £${totalJobPrice.toFixed(2)} (${job.pricePerHour}/hr × ${job.duration}min)`);
-        }
-    });
-
-    console.log('🔧 Normalizing booking - JobsPrices after enrichment:', normalizedBooking.jobsPrices);
-    console.log('🔧 Normalizing booking - Jobs total calculation:', Object.values(normalizedBooking.jobsPrices).reduce((sum, priceObj) => sum + (priceObj.price || 0), 0));
 
     // Ensure other required fields
     if (!normalizedBooking.location) normalizedBooking.location = { postalCode: '' };
@@ -134,6 +74,7 @@ export const BookingEditDialog = ({
     const [isLoadingParts, setIsLoadingParts] = useState(false);
     const [partsError, setPartsError] = useState<string | null>(null);
     const [partsSearchQuery, setPartsSearchQuery] = useState('');
+    const [partsMode, setPartsMode] = useState<'existing' | 'add-new'>('existing'); // New state for parts mode
     
     // Enhanced filtering and sorting state
     const [selectedTier, setSelectedTier] = useState<string>('all');
@@ -163,7 +104,6 @@ export const BookingEditDialog = ({
     useEffect(() => {
         if (booking) {
             // Normalize the booking data to ensure consistent structure
-            // We'll re-normalize after jobs are fetched to enrich with pricePerHour
             setEditedBooking(normalizeBookingData(booking));
             // Reset tabs and search
             setActiveTab('overview');
@@ -189,7 +129,7 @@ export const BookingEditDialog = ({
                 jobs: [],
                 location: { postalCode: '' },
                 schedules: [],
-                jobsPrices: {},
+                jobsPrices: [],
                 partItemsPrices: {},
                 partItems: [],
                 totalPrice: 0,
@@ -202,21 +142,18 @@ export const BookingEditDialog = ({
         }
     }, [booking, isOpen, carId]);
 
-    // Re-normalize booking data after jobs are fetched to enrich with pricePerHour
-    useEffect(() => {
-        if (booking && availableJobs.length > 0 && editedBooking) {
-            const enrichedBooking = normalizeBookingData(booking, availableJobs);
-            setEditedBooking(enrichedBooking);
-        }
-    }, [booking, availableJobs]);
-
     // Fetch available part items and jobs when the dialog opens
     useEffect(() => {
         if (isOpen) {
-            fetchAvailablePartItems();
+            // Only fetch jobs automatically - parts will be fetched on demand
             fetchAvailableJobs();
+            
+            // For new bookings (no existing booking), fetch parts automatically
+            if (!booking && carId) {
+                fetchAvailablePartItems();
+            }
         }
-    }, [isOpen]);
+    }, [isOpen, booking, carId]);
 
     // Function to fetch available part items
     const fetchAvailablePartItems = async () => {
@@ -225,101 +162,47 @@ export const BookingEditDialog = ({
 
         try {
             // Always try car-specific gold-in-stock endpoint first if we have a car ID
-            // Priority: 1. Car ID from editedBooking, 2. Car ID from booking prop, 3. Car ID from props, 4. Fallback to general endpoint
-            const editedBookingCarId = editedBooking?.car?.id;
-            const bookingPropCarId = booking?.car?.id;
-            const effectiveCarId = editedBookingCarId || bookingPropCarId || carId;
+            // Priority: 1. Car ID from booking, 2. Car ID from props, 3. Fallback to general endpoint
+            const bookingCarId = editedBooking?.car?.id;
+            const effectiveCarId = bookingCarId || carId;
             
-            console.log('🔧 BookingEditDialog - fetchAvailablePartItems - Starting parts fetch');
-            console.log('🔧 BookingEditDialog - Booking prop:', booking);
-            console.log('🔧 BookingEditDialog - Booking prop car ID:', bookingPropCarId);
-            console.log('🔧 BookingEditDialog - Edited booking object:', editedBooking);
-            console.log('🔧 BookingEditDialog - Edited booking car ID:', editedBookingCarId);
-            console.log('🔧 BookingEditDialog - Props Car ID:', carId);
-            console.log('🔧 BookingEditDialog - Effective Car ID:', effectiveCarId);
-            console.log('🔧 BookingEditDialog - Car ID type:', typeof effectiveCarId);
-            console.log('🔧 BookingEditDialog - Car ID length:', effectiveCarId?.length);
+            console.log('BookingEditDialog - fetchAvailablePartItems - Booking Car ID:', bookingCarId);
+            console.log('BookingEditDialog - fetchAvailablePartItems - Props Car ID:', carId);
+            console.log('BookingEditDialog - fetchAvailablePartItems - Effective Car ID:', effectiveCarId);
             
-            if (effectiveCarId && effectiveCarId.trim() !== '') {
-                try {
-                    // Use the car-specific gold-in-stock endpoint
-                    console.log('✅ BookingEditDialog - Using car-specific endpoint:', `/api/parts/car/${effectiveCarId}/gold-in-stock`);
-                    console.log('✅ BookingEditDialog - About to call JobService.getCarPartItems with carId:', effectiveCarId);
-                    
-                    const requestStart = Date.now();
-                    const response = await JobService.getCarPartItems(effectiveCarId);
-                    const requestEnd = Date.now();
-                    
-                    console.log('✅ BookingEditDialog - Car-specific API call completed in:', requestEnd - requestStart, 'ms');
-                    console.log('✅ BookingEditDialog - Car-specific API response:', response);
-                    
-                    if (response.responseObject) {
-                        const partItemsData = Array.isArray(response.responseObject)
-                            ? response.responseObject
-                            : [response.responseObject];
+            if (effectiveCarId) {
+                // Use the car-specific gold-in-stock endpoint
+                console.log('BookingEditDialog - Using car-specific endpoint:', `/api/part-items/car/${effectiveCarId}/gold-in-stock`);
+                const response = await JobService.getCarPartItems(effectiveCarId);
+                if (response.responseObject) {
+                    const partItemsData = Array.isArray(response.responseObject)
+                        ? response.responseObject
+                        : [response.responseObject];
 
-                        console.log('✅ BookingEditDialog - Car-specific parts loaded successfully:', partItemsData.length, 'parts');
-                        console.log('✅ BookingEditDialog - Sample parts data:', partItemsData.slice(0, 2));
-                        setAvailablePartItems(partItemsData);
-                        return; // Exit early on success
-                    } else {
-                        console.log('⚠️ BookingEditDialog - No parts returned from car-specific endpoint, trying fallback');
-                        console.log('⚠️ BookingEditDialog - Response object was:', response.responseObject);
-                    }
-                } catch (carSpecificError) {
-                    console.error('❌ BookingEditDialog - Car-specific endpoint failed with error:', carSpecificError);
-                    console.error('❌ BookingEditDialog - Error details:', {
-                        message: (carSpecificError as Error).message,
-                        stack: (carSpecificError as Error).stack,
-                        name: (carSpecificError as Error).name
-                    });
-                    console.log('❌ BookingEditDialog - Falling back to general endpoint due to car-specific error');
+                    console.log('BookingEditDialog - Car-specific parts loaded:', partItemsData.length, 'parts');
+                    setAvailablePartItems(partItemsData);
+                } else {
+                    console.log('BookingEditDialog - No parts returned from car-specific endpoint');
+                    setAvailablePartItems([]);
                 }
             } else {
-                console.log('❌ BookingEditDialog - No valid car ID available');
-                console.log('❌ BookingEditDialog - Car ID details:', {
-                    editedBookingCarId,
-                    bookingPropCarId,
-                    propsCarId: carId,
-                    effectiveCarId,
-                    type: typeof effectiveCarId,
-                    length: effectiveCarId?.length,
-                    trimmed: effectiveCarId?.trim(),
-                    isEmpty: !effectiveCarId || effectiveCarId.trim() === ''
-                });
-            }
+                // Fallback to general endpoint only if no car ID is available
+                console.log('BookingEditDialog - No car ID available, using general endpoint');
+                const response = await JobService.getAllPartItems();
+                if (response.responseObject) {
+                    const partItemsData = Array.isArray(response.responseObject)
+                        ? response.responseObject
+                        : [response.responseObject];
 
-            // Fallback to general endpoint if car-specific failed or no car ID
-            console.log('🔄 BookingEditDialog - Using general endpoint as fallback');
-            console.log('🔄 BookingEditDialog - About to call JobService.getAllPartItems');
-            
-            const fallbackRequestStart = Date.now();
-            const response = await JobService.getAllPartItems();
-            const fallbackRequestEnd = Date.now();
-            
-            console.log('✅ BookingEditDialog - General API call completed in:', fallbackRequestEnd - fallbackRequestStart, 'ms');
-            console.log('✅ BookingEditDialog - General API response:', response);
-            
-            if (response.responseObject) {
-                const partItemsData = Array.isArray(response.responseObject)
-                    ? response.responseObject
-                    : [response.responseObject];
-
-                console.log('✅ BookingEditDialog - General parts loaded:', partItemsData.length, 'parts');
-                console.log('✅ BookingEditDialog - Sample parts data:', partItemsData.slice(0, 2));
-                setAvailablePartItems(partItemsData);
-            } else {
-                console.log('❌ BookingEditDialog - No parts returned from general endpoint');
-                console.log('❌ BookingEditDialog - Response object was:', response.responseObject);
-                setAvailablePartItems([]);
+                    console.log('BookingEditDialog - General parts loaded:', partItemsData.length, 'parts');
+                    setAvailablePartItems(partItemsData);
+                } else {
+                    console.log('BookingEditDialog - No parts returned from general endpoint');
+                    setAvailablePartItems([]);
+                }
             }
         } catch (error) {
-            console.error("❌ BookingEditDialog - Error fetching part items:", error);
-            console.error("❌ BookingEditDialog - Error details:", {
-                message: (error as Error).message,
-                stack: (error as Error).stack,
-                name: (error as Error).name
-            });
+            console.error("Error fetching part items:", error);
             setPartsError("Failed to load available part items");
         } finally {
             setIsLoadingParts(false);
@@ -351,6 +234,72 @@ export const BookingEditDialog = ({
     };
 
     if (!isOpen || !editedBooking) return null;
+
+    // Handler for job updates
+    const handleJobChange = (index: number, field: string, value: string | number | boolean) => {
+        const updatedJobs = [...editedBooking.jobs];
+        updatedJobs[index] = { ...updatedJobs[index], [field]: value };
+
+        setEditedBooking({
+            ...editedBooking,
+            jobs: updatedJobs
+        });
+    };
+
+    // Handler for schedule updates
+    const handleScheduleChange = (index: number, field: string, value: string | boolean | string[]) => {
+        const newSchedules = [...(editedBooking.schedules || [])];
+        newSchedules[index] = {
+            ...newSchedules[index],
+            [field]: value
+        };
+
+        setEditedBooking({
+            ...editedBooking,
+            schedules: newSchedules
+        });
+    };
+
+    // Remove a job
+    const handleRemoveJob = (index: number) => {
+        const updatedJobs = [...editedBooking.jobs];
+        const removedJob = updatedJobs[index];
+        updatedJobs.splice(index, 1);
+
+        // Also remove from jobsPrices
+        const updatedJobsPrices = editedBooking.jobsPrices.filter(jp => jp.id !== removedJob.id);
+
+        setEditedBooking({
+            ...editedBooking,
+            jobs: updatedJobs,
+            jobsPrices: updatedJobsPrices
+        });
+    };
+
+    // Remove a schedule
+    const handleRemoveSchedule = (index: number) => {
+        const newSchedules = [...(editedBooking.schedules || [])];
+        newSchedules.splice(index, 1);
+
+        setEditedBooking({
+            ...editedBooking,
+            schedules: newSchedules
+        });
+    };
+
+    // Add a new schedule
+    const handleAddSchedule = () => {
+        const newSchedule = {
+            id: `temp-${Date.now()}`,
+            timeInterval: '09:00-10:00',
+            dates: [format(new Date(), 'yyyy-MM-dd')]
+        };
+
+        setEditedBooking({
+            ...editedBooking,
+            schedules: [...(editedBooking.schedules || []), newSchedule]
+        });
+    };
 
     // Handle save
     const handleSave = async () => {
@@ -488,8 +437,8 @@ export const BookingEditDialog = ({
                     bValue = b.sku?.toLowerCase() || '';
                     break;
                 case 'price':
-                    aValue = a.pricePerHour || 0;
-                    bValue = b.pricePerHour || 0;
+                    aValue = a.priceForConsumer || 0;
+                    bValue = b.priceForConsumer || 0;
                     break;
                 case 'tier': {
                     const tierOrder = { 'gold': 3, 'silver': 2, 'bronze': 1 };
@@ -659,68 +608,6 @@ export const BookingEditDialog = ({
         return days;
     };
 
-    // Helper function to check if a part is already in the booking
-    const isPartInBooking = (partId: string): boolean => {
-        // Check both 'partItems' and 'parts' properties since the API might use different names
-        const editedBookingWithParts = editedBooking as (Booking & { parts?: PartItem[] }) | null;
-        const bookingParts = editedBookingWithParts?.partItems || editedBookingWithParts?.parts || [];
-        const isInBooking = bookingParts.some(item => item.id === partId);
-        
-        // Debug logging for troubleshooting
-        if (window.location.hostname === 'localhost') {
-            console.log(`🔍 Checking if part ${partId} is in booking:`, {
-                partId,
-                isInBooking,
-                editedBookingPartItems: editedBookingWithParts?.partItems?.length || 0,
-                editedBookingParts: editedBookingWithParts?.parts?.length || 0,
-                bookingPartsUsed: bookingParts.length,
-                bookingPartIds: bookingParts.map(p => p.id),
-                editedBookingStructure: Object.keys(editedBooking || {})
-            });
-        }
-        
-        return isInBooking;
-    };
-
-    // Helper function to add a part to the booking
-    const addPartToBooking = (part: PartItem) => {
-        if (!editedBooking) return;
-        
-        const updatedPartItems = [...editedBooking.partItems, part];
-        const updatedPartItemsPrices = {
-            ...editedBooking.partItemsPrices,
-            [part.id]: { price: part.priceForConsumer || 0 }
-        };
-
-        setEditedBooking({
-            ...editedBooking,
-            partItems: updatedPartItems,
-            partItemsPrices: updatedPartItemsPrices
-        });
-        
-        toast.success(`Added ${part.title} to booking`);
-    };
-
-    // Helper function to remove a part from the booking
-    const removePartFromBooking = (partId: string) => {
-        if (!editedBooking) return;
-        
-        const partToRemove = editedBooking.partItems.find(p => p.id === partId);
-        const updatedPartItems = editedBooking.partItems.filter(p => p.id !== partId);
-        const updatedPartItemsPrices = { ...editedBooking.partItemsPrices };
-        delete updatedPartItemsPrices[partId];
-
-        setEditedBooking({
-            ...editedBooking,
-            partItems: updatedPartItems,
-            partItemsPrices: updatedPartItemsPrices
-        });
-        
-        if (partToRemove) {
-            toast.success(`Removed ${partToRemove.title} from booking`);
-        }
-    };
-
     return (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50 p-4 overflow-y-auto">
             <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full p-6 animate-fade-in max-h-[90vh] overflow-y-auto">
@@ -743,9 +630,7 @@ export const BookingEditDialog = ({
                         <div className="text-center">
                             <div className="text-sm text-gray-600">Jobs Total</div>
                             <div className="text-lg font-semibold text-indigo-600">
-                                £{Object.values(editedBooking.jobsPrices || {})
-                                    .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
-                                    .toFixed(2)}
+                                £{editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0).toFixed(2)}
                             </div>
                             <div className="text-xs text-gray-500">
                                 {editedBooking.jobs.length} job{editedBooking.jobs.length !== 1 ? 's' : ''}
@@ -766,16 +651,14 @@ export const BookingEditDialog = ({
                             <div className="text-sm text-gray-600">Subtotal</div>
                             <div className="text-lg font-semibold text-gray-700">
                                 £{(
-                                    Object.values(editedBooking.jobsPrices || {})
-                                        .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0) +
+                                    editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0) +
                                     Object.values(editedBooking.partItemsPrices || {})
                                         .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
                                 ).toFixed(2)}
                             </div>
                             <div className="text-xs text-gray-500">
                                 VAT: £{(
-                                    (Object.values(editedBooking.jobsPrices || {})
-                                        .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0) +
+                                    (editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0) +
                                     Object.values(editedBooking.partItemsPrices || {})
                                         .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)) * 0.20
                                 ).toFixed(2)}
@@ -785,8 +668,7 @@ export const BookingEditDialog = ({
                             <div className="text-sm text-gray-600">Total (inc. VAT)</div>
                             <div className="text-xl font-bold text-green-600">
                                 £{(
-                                    (Object.values(editedBooking.jobsPrices || {})
-                                        .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0) +
+                                    (editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0) +
                                     Object.values(editedBooking.partItemsPrices || {})
                                         .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)) * 1.20
                                 ).toFixed(2)}
@@ -876,7 +758,7 @@ export const BookingEditDialog = ({
                                     <div className="bg-gray-50 rounded-lg p-4">
                                         <div className="space-y-2">
                                             {editedBooking.jobs.map((job) => {
-                                                const jobPrice = editedBooking.jobsPrices?.[job.id];
+                                                const jobPrice = editedBooking.jobsPrices.find(jp => jp.id === job.id);
                                                 const totalJobPrice = job.pricePerHour ? (job.pricePerHour * job.duration) / 60 : 0;
                                                 
                                                 return (
@@ -901,9 +783,8 @@ export const BookingEditDialog = ({
                                                                 onClick={() => {
                                                                     // Remove the job from jobs array
                                                                     const updatedJobs = editedBooking.jobs.filter(j => j.id !== job.id);
-                                                                    // Remove from jobsPrices object
-                                                                    const updatedJobsPrices = { ...editedBooking.jobsPrices };
-                                                                    delete updatedJobsPrices[job.id];
+                                                                    // Remove from jobsPrices array
+                                                                    const updatedJobsPrices = editedBooking.jobsPrices.filter(jp => jp.id !== job.id);
 
                                                                     setEditedBooking({
                                                                         ...editedBooking,
@@ -928,9 +809,7 @@ export const BookingEditDialog = ({
                                         <div className="border-t border-gray-300 pt-2 mt-3">
                                             <div className="flex justify-between items-center font-bold text-lg">
                                                 <span>Total Jobs:</span>
-                                                <span>£{Object.values(editedBooking.jobsPrices || {})
-                                                    .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
-                                                    .toFixed(2)}</span>
+                                                <span>£{editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0).toFixed(2)}</span>
                                             </div>
                                             <div className="text-xs text-gray-500 text-right">
                                                 Total Duration: {editedBooking.jobs.reduce((sum, job) => sum + job.duration, 0)} minutes
@@ -1072,9 +951,7 @@ export const BookingEditDialog = ({
                                 <div className="space-y-2">
                                     <div className="flex justify-between items-center text-sm">
                                         <span>Jobs Total:</span>
-                                        <span>£{Object.values(editedBooking.jobsPrices || {})
-                                            .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
-                                            .toFixed(2)}</span>
+                                        <span>£{editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0).toFixed(2)}</span>
                                     </div>
                                     <div className="flex justify-between items-center text-sm">
                                         <span>Parts Total:</span>
@@ -1089,8 +966,7 @@ export const BookingEditDialog = ({
                                             <span>Subtotal:</span>
                                             <span>
                                                 £{(
-                                                    Object.values(editedBooking.jobsPrices || {})
-                                                        .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0) +
+                                                    editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0) +
                                                     Object.values(editedBooking.partItemsPrices || {})
                                                         .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
                                                 ).toFixed(2)}
@@ -1100,8 +976,7 @@ export const BookingEditDialog = ({
                                             <span>VAT (20%):</span>
                                             <span>
                                                 £{(
-                                                    (Object.values(editedBooking.jobsPrices || {})
-                                                        .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0) +
+                                                    (editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0) +
                                                     Object.values(editedBooking.partItemsPrices || {})
                                                         .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)) * 0.20
                                                 ).toFixed(2)}
@@ -1112,8 +987,7 @@ export const BookingEditDialog = ({
                                                 <span className="font-semibold">Total Price (inc. VAT):</span>
                                                 <span className="font-bold text-lg">
                                                     £{(
-                                                        (Object.values(editedBooking.jobsPrices || {})
-                                                            .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0) +
+                                                        (editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0) +
                                                         Object.values(editedBooking.partItemsPrices || {})
                                                             .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)) * 1.20
                                                     ).toFixed(2)}
@@ -1324,8 +1198,8 @@ export const BookingEditDialog = ({
                                                     bValue = b.duration || 0;
                                                     break;
                                                 case 'price':
-                                                    aValue = a.pricePerHour || 0;
-                                                    bValue = b.pricePerHour || 0;
+                                                    aValue = a.priceForConsumer || 0;
+                                                    bValue = b.priceForConsumer || 0;
                                                     break;
                                                 case 'category':
                                                     aValue = a.category?.toLowerCase() || '';
@@ -1410,10 +1284,10 @@ export const BookingEditDialog = ({
                                                                                 setEditedBooking({
                                                                                     ...editedBooking,
                                                                                     jobs: [...editedBooking.jobs, job],
-                                                                                    jobsPrices: {
+                                                                                    jobsPrices: [
                                                                                         ...editedBooking.jobsPrices,
-                                                                                        [job.id]: { price: totalJobPrice, duration: job.duration }
-                                                                                    }
+                                                                                        { id: job.id, price: totalJobPrice, duration: job.duration }
+                                                                                    ]
                                                                                 });
                                                                                 toast.success(`Added ${job.name} to booking`);
                                                                             } else {
@@ -1477,10 +1351,10 @@ export const BookingEditDialog = ({
                                                                                     setEditedBooking({
                                                                                         ...editedBooking,
                                                                                         jobs: [...editedBooking.jobs, job],
-                                                                                        jobsPrices: {
+                                                                                        jobsPrices: [
                                                                                             ...editedBooking.jobsPrices,
-                                                                                            [job.id]: { price: totalJobPrice, duration: job.duration }
-                                                                                        }
+                                                                                            { id: job.id, price: totalJobPrice, duration: job.duration }
+                                                                                        ]
                                                                                     });
                                                                                     toast.success(`Added ${job.name} to booking`);
                                                                                 } else {
@@ -1536,7 +1410,7 @@ export const BookingEditDialog = ({
                                     <h4 className="text-sm font-semibold uppercase text-gray-600 mb-3">Selected Jobs Summary</h4>
                                     <div className="space-y-2">
                                         {editedBooking.jobs.map((job) => {
-                                            const jobPrice = editedBooking.jobsPrices?.[job.id];
+                                            const jobPrice = editedBooking.jobsPrices.find(jp => jp.id === job.id);
                                             const totalJobPrice = job.pricePerHour ? (job.pricePerHour * job.duration) / 60 : 0;
                                             
                                             return (
@@ -1558,9 +1432,8 @@ export const BookingEditDialog = ({
                                                             onClick={() => {
                                                                 // Remove the job from jobs array
                                                                 const updatedJobs = editedBooking.jobs.filter(j => j.id !== job.id);
-                                                                // Remove from jobsPrices object
-                                                                const updatedJobsPrices = { ...editedBooking.jobsPrices };
-                                                                delete updatedJobsPrices[job.id];
+                                                                // Remove from jobsPrices array
+                                                                const updatedJobsPrices = editedBooking.jobsPrices.filter(jp => jp.id !== job.id);
 
                                                                 setEditedBooking({
                                                                     ...editedBooking,
@@ -1582,32 +1455,13 @@ export const BookingEditDialog = ({
                                             );
                                         })}
                                         <div className="border-t border-gray-300 pt-2 mt-3">
-                                            {(() => {
-                                                const jobsSubtotal = Object.values(editedBooking.jobsPrices || {})
-                                                    .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0);
-                                                const jobsVat = jobsSubtotal * 0.20;
-                                                const jobsTotal = jobsSubtotal + jobsVat;
-                                                
-                                                return (
-                                                    <>
-                                                        <div className="flex justify-between items-center text-sm">
-                                                            <span>Services Subtotal:</span>
-                                                            <span>£{jobsSubtotal.toFixed(2)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center text-sm">
-                                                            <span>VAT (20%):</span>
-                                                            <span>£{jobsVat.toFixed(2)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between items-center font-bold text-lg border-t border-gray-300 pt-2 mt-2">
-                                                            <span>Services Total (inc. VAT):</span>
-                                                            <span>£{jobsTotal.toFixed(2)}</span>
-                                                        </div>
-                                                        <div className="text-xs text-gray-500 text-right">
-                                                            Total Duration: {editedBooking.jobs.reduce((sum, job) => sum + job.duration, 0)} minutes
-                                                        </div>
-                                                    </>
-                                                );
-                                            })()}
+                                            <div className="flex justify-between items-center font-bold text-lg">
+                                                <span>Total Jobs:</span>
+                                                <span>£{editedBooking.jobsPrices.reduce((sum, jp) => sum + jp.price, 0).toFixed(2)}</span>
+                                            </div>
+                                            <div className="text-xs text-gray-500 text-right">
+                                                Total Duration: {editedBooking.jobs.reduce((sum, job) => sum + job.duration, 0)} minutes
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -1618,505 +1472,716 @@ export const BookingEditDialog = ({
                     {/* Parts Tab */}
                     {activeTab === 'parts' && (
                         <div>
+                            {/* Mode Toggle */}
                             <div className="flex justify-between items-center mb-6">
                                 <div>
-                                    <h3 className="text-lg font-medium">Parts Library</h3>
-                                    <p className="text-sm text-gray-500">Search, filter, and select parts for this booking</p>
+                                    <h3 className="text-lg font-medium">Parts Management</h3>
+                                    <p className="text-sm text-gray-500">
+                                        {partsMode === 'existing' 
+                                            ? 'View and edit parts already in this booking' 
+                                            : 'Search and add new parts to this booking'
+                                        }
+                                    </p>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    {/* View Mode Toggle */}
-                                    <div className="flex bg-gray-100 rounded-lg p-1">
-                                        <button
-                                            onClick={() => setViewMode('grid')}
-                                            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                                                viewMode === 'grid' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                                            }`}
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-                                            </svg>
-                                        </button>
-                                        <button
-                                            onClick={() => setViewMode('list')}
-                                            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                                                viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                                            }`}
-                                        >
-                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                                            </svg>
-                                        </button>
-                                    </div>
-
-                                    {/* Group by Category Toggle */}
+                                <div className="flex bg-gray-100 rounded-lg p-1">
                                     <button
-                                        onClick={() => setGroupByCategory(!groupByCategory)}
-                                        className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                                            groupByCategory ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600 hover:text-gray-900'
+                                        onClick={() => setPartsMode('existing')}
+                                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                                            partsMode === 'existing' 
+                                                ? 'bg-white text-gray-900 shadow-sm' 
+                                                : 'text-gray-600 hover:text-gray-900'
                                         }`}
-                                        title={groupByCategory ? 'Disable category grouping' : 'Enable category grouping'}
                                     >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14-7H3a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2z" />
-                                        </svg>
-                                        Group
+                                        Existing Parts ({editedBooking.partItems.length})
                                     </button>
-                                </div>
-                            </div>
-
-                            {/* Search and Filters */}
-                            <div className="mb-6 space-y-4">
-                                {/* Search Bar */}
-                                <div className="relative">
-                                    <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-                                        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z" />
-                                        </svg>
-                                    </div>
-                                    <input
-                                        type="search"
-                                        className="block w-full pl-10 pr-12 py-3 text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                        placeholder="Search by name, SKU, category, or group..."
-                                        value={partsSearchQuery}
-                                        onChange={(e) => setPartsSearchQuery(e.target.value)}
-                                    />
-                                    {partsSearchQuery && (
-                                        <button
-                                            onClick={() => setPartsSearchQuery('')}
-                                            className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600"
-                                        >
-                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                                            </svg>
-                                        </button>
-                                    )}
-                                </div>
-
-                                {/* Filter Row */}
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                    {/* Tier Filter */}
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Tier</label>
-                                        <select
-                                            value={selectedTier}
-                                            onChange={(e) => setSelectedTier(e.target.value)}
-                                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                        >
-                                            <option value="all">All Tiers</option>
-                                            {getUniqueTiers().map(tier => (
-                                                <option key={tier} value={tier}>{tier}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    {/* Category Filter */}
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                                        <select
-                                            value={selectedCategory}
-                                            onChange={(e) => setSelectedCategory(e.target.value)}
-                                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                        >
-                                            <option value="all">All Categories</option>
-                                            {getUniqueCategories().map(category => (
-                                                <option key={category} value={category}>{category}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    {/* Group Filter */}
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Group</label>
-                                        <select
-                                            value={selectedGroup}
-                                            onChange={(e) => setSelectedGroup(e.target.value)}
-                                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                        >
-                                            <option value="all">All Groups</option>
-                                            {getUniqueGroups().map(group => (
-                                                <option key={group} value={group}>{group}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-
-                                    {/* Stock Filter */}
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Stock</label>
-                                        <select
-                                            value={stockFilter}
-                                            onChange={(e) => setStockFilter(e.target.value)}
-                                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                        >
-                                            <option value="all">All Stock</option>
-                                            <option value="in-stock">In Stock</option>
-                                            <option value="out-of-stock">Out of Stock</option>
-                                        </select>
-                                    </div>
-                                </div>
-
-                                {/* Sort and Actions Row */}
-                                <div className="flex flex-wrap items-center justify-between gap-4">
-                                    <div className="flex items-center gap-4">
-                                        {/* Sort By */}
-                                        <div className="flex items-center gap-2">
-                                            <label className="text-sm font-medium text-gray-700">Sort by:</label>
-                                            <select
-                                                value={sortBy}
-                                                onChange={(e) => setSortBy(e.target.value)}
-                                                className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                            >
-                                                <option value="name">Name</option>
-                                                <option value="sku">SKU</option>
-                                                <option value="price">Price</option>
-                                                <option value="tier">Tier</option>
-                                                <option value="category">Category</option>
-                                                <option value="stock">Stock Status</option>
-                                            </select>
-                                        </div>
-
-                                        {/* Sort Order */}
-                                        <button
-                                            onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                                            className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md hover:bg-gray-50"
-                                        >
-                                            {sortOrder === 'asc' ? (
-                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
-                                                </svg>
-                                            ) : (
-                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4" />
-                                                </svg>
-                                            )}
-                                            {sortOrder === 'asc' ? 'A-Z' : 'Z-A'}
-                                        </button>
-                                    </div>
-
-                                    {/* Filter Actions */}
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            onClick={resetFilters}
-                                            className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md hover:bg-gray-50"
-                                        >
-                                            Reset Filters
-                                        </button>
-                                        <span className="text-sm text-gray-500">
-                                            {getFilteredAndSortedParts().length} of {availablePartItems.length} parts
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Parts Display */}
-                            {isLoadingParts ? (
-                                <div className="flex justify-center items-center py-12">
-                                    <Loader />
-                                </div>
-                            ) : partsError ? (
-                                <div className="text-center border border-red-200 bg-red-50 rounded-lg p-6 text-red-800">
-                                    <div className="mb-2">
-                                        <svg className="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.314 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                                        </svg>
-                                    </div>
-                                    <h3 className="text-lg font-medium mb-2">Error Loading Parts</h3>
-                                    <p className="mb-4">{partsError}</p>
                                     <button
-                                        onClick={fetchAvailablePartItems}
-                                        className="inline-flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                                        onClick={() => {
+                                            setPartsMode('add-new');
+                                            // Fetch available parts when switching to add-new mode
+                                            if (availablePartItems.length === 0 && !isLoadingParts) {
+                                                fetchAvailablePartItems();
+                                            }
+                                        }}
+                                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                                            partsMode === 'add-new' 
+                                                ? 'bg-white text-gray-900 shadow-sm' 
+                                                : 'text-gray-600 hover:text-gray-900'
+                                        }`}
                                     >
-                                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                        </svg>
-                                        Try Again
+                                        Add New Parts
                                     </button>
                                 </div>
-                            ) : (
-                                <>
-                                    {getFilteredAndSortedParts().length > 0 ? (
-                                        groupByCategory ? (
-                                            // Grouped by Category View
-                                            <div className="space-y-6 max-h-96 overflow-y-auto">
-                                                {Object.entries(getGroupedPartsByCategory(getFilteredAndSortedParts())).map(([categoryName, categoryData]) => (
-                                                    <div key={categoryName} className="space-y-3">
-                                                        {/* Category Header */}
-                                                        <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
-                                                            {categoryData.categoryImage ? (
-                                                                <img 
-                                                                    src={categoryData.categoryImage} 
-                                                                    alt={categoryName}
-                                                                    className="w-8 h-8 object-cover rounded-lg border"
-                                                                    onError={(e) => {
-                                                                        e.currentTarget.style.display = 'none';
-                                                                    }}
-                                                                />
-                                                            ) : (
-                                                                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
-                                                                    <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14-7H3a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2z" />
-                                                                    </svg>
+                            </div>
+
+                            {/* Existing Parts Mode */}
+                            {partsMode === 'existing' && (
+                                <div>
+                                    {editedBooking.partItems.length > 0 ? (
+                                        <div className="space-y-3">
+                                            {editedBooking.partItems.map((part) => {
+                                                const partPrice = editedBooking.partItemsPrices?.[part.id];
+                                                const displayPrice = partPrice ? partPrice.price : part.priceForConsumer || 0;
+
+                                                return (
+                                                    <div key={part.id} className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
+                                                        <div className="flex items-start justify-between">
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="flex items-center gap-2 mb-2">
+                                                                    <h4 className="text-sm font-medium text-gray-900">
+                                                                        {part.title || part.name || 'Unknown Part'}
+                                                                    </h4>
+                                                                    {part.tier && (
+                                                                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${getTierBadgeClasses(part.tier)}`}>
+                                                                            {part.tier}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
-                                                            )}
-                                                            <div>
-                                                                <h3 className="text-lg font-semibold text-gray-900">{categoryName}</h3>
-                                                                <p className="text-sm text-gray-500">{categoryData.parts.length} part{categoryData.parts.length !== 1 ? 's' : ''}</p>
+                                                                
+                                                                {part.sku && (
+                                                                    <p className="text-xs text-gray-500 font-mono mb-1">
+                                                                        SKU: {part.sku}
+                                                                    </p>
+                                                                )}
+                                                                
+                                                                {part.description && (
+                                                                    <p className="text-xs text-gray-600 mb-2">
+                                                                        {part.description}
+                                                                    </p>
+                                                                )}
+                                                                
+                                                                {part.stockSummary && (
+                                                                    <p className="text-xs text-gray-500">
+                                                                        Stock: {part.stockSummary}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                            
+                                                            <div className="flex items-center gap-3 ml-4">
+                                                                <div className="text-right">
+                                                                    <div className="text-sm font-semibold text-green-600">
+                                                                        £{displayPrice.toFixed(2)}
+                                                                    </div>
+                                                                    {isAdmin && part.price && (
+                                                                        <div className="text-xs text-gray-500">
+                                                                            Cost: £{part.price.toFixed(2)}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        // Remove the part from partItems array
+                                                                        const updatedPartItems = editedBooking.partItems.filter(p => p.id !== part.id);
+                                                                        // Remove the price from partItemsPrices object
+                                                                        const updatedPrices = { ...editedBooking.partItemsPrices };
+                                                                        delete updatedPrices[part.id];
+
+                                                                        setEditedBooking({
+                                                                            ...editedBooking,
+                                                                            partItems: updatedPartItems,
+                                                                            partItemsPrices: updatedPrices
+                                                                        });
+
+                                                                        toast.success(`Removed ${part.title || part.name} from booking`);
+                                                                    }}
+                                                                    className="text-red-600 hover:text-red-800 p-2 rounded-full hover:bg-red-50 flex-shrink-0"
+                                                                    title={`Remove ${part.title || part.name}`}
+                                                                >
+                                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                                                    </svg>
+                                                                </button>
                                                             </div>
                                                         </div>
-
-                                                        {/* Category Parts */}
-                                                        <div className={`${viewMode === 'grid' 
-                                                            ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' 
-                                                            : 'space-y-2'
-                                                        }`}>
-                                                            {categoryData.parts.map(part => {
-                                                                const isAlreadyAdded = isPartInBooking(part.id);
-                                                                const isInStock = part.stockSummary?.toLowerCase().includes('in stock');
-
-                                                                return (
-                                                                    <div key={part.id} className={`border rounded-lg p-4 bg-white hover:shadow-md transition-shadow ${
-                                                                        isAlreadyAdded ? 'border-green-200 bg-green-50' : 'border-gray-200'
-                                                                    }`}>
-                                                                        {/* Part Image */}
-                                                                        <div className="flex items-start gap-3 mb-3">
-                                                                            <div className="flex-shrink-0">
-                                                                                {part.img ? (
-                                                                                    <img 
-                                                                                        src={part.img} 
-                                                                                        alt={part.title}
-                                                                                        className="w-12 h-12 object-cover rounded-lg border"
-                                                                                        onError={(e) => {
-                                                                                            e.currentTarget.style.display = 'none';
-                                                                                        }}
-                                                                                    />
-                                                                                ) : (
-                                                                                    <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
-                                                                                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-                                                                                        </svg>
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-
-                                                                            <div className="flex-grow min-w-0">
-                                                                                <h4 className="font-medium text-gray-900 truncate">{part.title}</h4>
-                                                                                <p className="text-sm text-gray-600">{part.sku}</p>
-                                                                                
-                                                                                {/* Groups */}
-                                                                                {part.groups && part.groups.length > 0 && (
-                                                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                                                        {part.groups.slice(0, 2).map((group, index) => (
-                                                                                            <span key={index} className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full">
-                                                                                                {group}
-                                                                                            </span>
-                                                                                        ))}
-                                                                                        {part.groups.length > 2 && (
-                                                                                            <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
-                                                                                                +{part.groups.length - 2}
-                                                                                            </span>
-                                                                                        )}
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        </div>
-
-                                                                        {/* Badges */}
-                                                                        <div className="flex items-center gap-2 mb-3">
-                                                                            {part.tier && (
-                                                                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTierBadgeClasses(part.tier)}`}>
-                                                                                    {part.tier}
-                                                                                </span>
-                                                                            )}
-                                                                            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                                                                isInStock ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                                                                            }`}>
-                                                                                {part.stockSummary || 'Unknown'}
-                                                                            </span>
-                                                                            {isAlreadyAdded && (
-                                                                                <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                                                    ✓ Selected
-                                                                                </span>
-                                                                            )}
-                                                                        </div>
-
-                                                                        {/* Pricing */}
-                                                                        <div className="mb-3">
-                                                                            <div className="text-lg font-bold text-gray-900">
-                                                                                £{part.priceForConsumer?.toFixed(2) ?? 'N/A'}
-                                                                            </div>
-                                                                            <div className="text-sm text-gray-500">
-                                                                                Cost: £{part.price?.toFixed(2) ?? 'N/A'}
-                                                                            </div>
-                                                                        </div>
-
-                                                                        {/* Action Button */}
-                                                                        <button
-                                                                            onClick={() => {
-                                                                                if (isAlreadyAdded) {
-                                                                                    removePartFromBooking(part.id);
-                                                                                } else if (isInStock) {
-                                                                                    addPartToBooking(part);
-                                                                                } else {
-                                                                                    toast.warning(`${part.title} is not in stock`);
-                                                                                }
-                                                                            }}
-                                                                            disabled={!isInStock && !isAlreadyAdded}
-                                                                            className={`w-full px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                                                                isAlreadyAdded 
-                                                                                    ? 'bg-red-100 text-red-800 hover:bg-red-200'
-                                                                                    : !isInStock
-                                                                                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                                                                        : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                                                                            }`}
-                                                                        >
-                                                                            {isAlreadyAdded ? 'Remove from Booking' : !isInStock ? 'Out of Stock' : 'Add to Booking'}
-                                                                        </button>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
                                                     </div>
-                                                ))}
+                                                );
+                                            })}
+                                            
+                                            {/* Total for existing parts */}
+                                            <div className="border-t border-gray-300 pt-4 mt-4">
+                                                <div className="flex justify-between items-center font-bold text-lg">
+                                                    <span>Total Parts:</span>
+                                                    <span className="text-green-600">
+                                                        £{Object.values(editedBooking.partItemsPrices || {})
+                                                            .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
+                                                            .toFixed(2)}
+                                                    </span>
+                                                </div>
+                                                <div className="text-xs text-gray-500 text-right">
+                                                    {editedBooking.partItems.length} part{editedBooking.partItems.length !== 1 ? 's' : ''} selected
+                                                </div>
                                             </div>
-                                        ) : (
-                                            // Ungrouped View
-                                            <div className={`${viewMode === 'grid' 
-                                                ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' 
-                                                : 'space-y-2'
-                                            } max-h-96 overflow-y-auto`}>
-                                                {getFilteredAndSortedParts().map(part => {
-                                                    const isAlreadyAdded = isPartInBooking(part.id);
-                                                    const isInStock = part.stockSummary?.toLowerCase().includes('in stock');
+                                        </div>
+                                    ) : (
+                                        <div className="text-center py-12 bg-gray-50 rounded-lg border border-gray-200">
+                                            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                            </svg>
+                                            <h3 className="mt-4 text-lg font-medium text-gray-900">No parts in this booking</h3>
+                                            <p className="mt-2 text-sm text-gray-500">
+                                                Switch to "Add New Parts" to add parts to this booking.
+                                            </p>
+                                            <button
+                                                onClick={() => {
+                                                    setPartsMode('add-new');
+                                                    if (availablePartItems.length === 0 && !isLoadingParts) {
+                                                        fetchAvailablePartItems();
+                                                    }
+                                                }}
+                                                className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                                            >
+                                                <RiAddLine className="mr-2" />
+                                                Add Parts
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
-                                                    return (
-                                                        <div key={part.id} className={`border rounded-lg p-4 bg-white hover:shadow-md transition-shadow ${
-                                                            isAlreadyAdded ? 'border-green-200 bg-green-50' : 'border-gray-200'
-                                                        }`}>
-                                                            {/* Part content similar to above */}
-                                                            <div className="flex items-start gap-3 mb-3">
-                                                                <div className="flex-shrink-0">
-                                                                    {part.img ? (
+                            {/* Add New Parts Mode */}
+                            {partsMode === 'add-new' && (
+                                <div>
+                                    <div className="flex justify-between items-center mb-6">
+                                        <div>
+                                            <h4 className="text-md font-medium">Parts Library</h4>
+                                            <p className="text-sm text-gray-500">Search, filter, and select parts for this booking</p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {/* View Mode Toggle */}
+                                            <div className="flex bg-gray-100 rounded-lg p-1">
+                                                <button
+                                                    onClick={() => setViewMode('grid')}
+                                                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                                                        viewMode === 'grid' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                                                    }`}
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                                                    </svg>
+                                                </button>
+                                                <button
+                                                    onClick={() => setViewMode('list')}
+                                                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                                                        viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                                                    }`}
+                                                >
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                                                    </svg>
+                                                </button>
+                                            </div>
+
+                                            {/* Group by Category Toggle */}
+                                            <button
+                                                onClick={() => setGroupByCategory(!groupByCategory)}
+                                                className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                                                    groupByCategory ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600 hover:text-gray-900'
+                                                }`}
+                                                title={groupByCategory ? 'Disable category grouping' : 'Enable category grouping'}
+                                            >
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14-7H3a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2z" />
+                                                </svg>
+                                                Group
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Search and Filters */}
+                                    <div className="mb-6 space-y-4">
+                                        {/* Search Bar */}
+                                        <div className="relative">
+                                            <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                                                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z" />
+                                                </svg>
+                                            </div>
+                                            <input
+                                                type="search"
+                                                className="block w-full pl-10 pr-12 py-3 text-sm text-gray-900 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                placeholder="Search by name, SKU, category, or group..."
+                                                value={partsSearchQuery}
+                                                onChange={(e) => setPartsSearchQuery(e.target.value)}
+                                            />
+                                            {partsSearchQuery && (
+                                                <button
+                                                    onClick={() => setPartsSearchQuery('')}
+                                                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600"
+                                                >
+                                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                                    </svg>
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Filter Row */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                            {/* Tier Filter */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Tier</label>
+                                                <select
+                                                    value={selectedTier}
+                                                    onChange={(e) => setSelectedTier(e.target.value)}
+                                                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                >
+                                                    <option value="all">All Tiers</option>
+                                                    {getUniqueTiers().map(tier => (
+                                                        <option key={tier} value={tier}>{tier}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Category Filter */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                                                <select
+                                                    value={selectedCategory}
+                                                    onChange={(e) => setSelectedCategory(e.target.value)}
+                                                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                >
+                                                    <option value="all">All Categories</option>
+                                                    {getUniqueCategories().map(category => (
+                                                        <option key={category} value={category}>{category}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Group Filter */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Group</label>
+                                                <select
+                                                    value={selectedGroup}
+                                                    onChange={(e) => setSelectedGroup(e.target.value)}
+                                                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                >
+                                                    <option value="all">All Groups</option>
+                                                    {getUniqueGroups().map(group => (
+                                                        <option key={group} value={group}>{group}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+
+                                            {/* Stock Filter */}
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1">Stock</label>
+                                                <select
+                                                    value={stockFilter}
+                                                    onChange={(e) => setStockFilter(e.target.value)}
+                                                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                >
+                                                    <option value="all">All Stock</option>
+                                                    <option value="in-stock">In Stock</option>
+                                                    <option value="out-of-stock">Out of Stock</option>
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        {/* Sort and Actions Row */}
+                                        <div className="flex flex-wrap items-center justify-between gap-4">
+                                            <div className="flex items-center gap-4">
+                                                {/* Sort By */}
+                                                <div className="flex items-center gap-2">
+                                                    <label className="text-sm font-medium text-gray-700">Sort by:</label>
+                                                    <select
+                                                        value={sortBy}
+                                                        onChange={(e) => setSortBy(e.target.value)}
+                                                        className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                    >
+                                                        <option value="name">Name</option>
+                                                        <option value="sku">SKU</option>
+                                                        <option value="price">Price</option>
+                                                        <option value="tier">Tier</option>
+                                                        <option value="category">Category</option>
+                                                        <option value="stock">Stock Status</option>
+                                                    </select>
+                                                </div>
+
+                                                {/* Sort Order */}
+                                                <button
+                                                    onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                                                    className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md hover:bg-gray-50"
+                                                >
+                                                    {sortOrder === 'asc' ? (
+                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+                                                        </svg>
+                                                    ) : (
+                                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4" />
+                                                        </svg>
+                                                    )}
+                                                    {sortOrder === 'asc' ? 'A-Z' : 'Z-A'}
+                                                </button>
+                                            </div>
+
+                                            {/* Filter Actions */}
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={resetFilters}
+                                                    className="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md hover:bg-gray-50"
+                                                >
+                                                    Reset Filters
+                                                </button>
+                                                <span className="text-sm text-gray-500">
+                                                    {getFilteredAndSortedParts().length} of {availablePartItems.length} parts
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Parts Display */}
+                                    {isLoadingParts ? (
+                                        <div className="flex justify-center items-center py-12">
+                                            <Loader />
+                                        </div>
+                                    ) : partsError ? (
+                                        <div className="text-center border border-red-200 bg-red-50 rounded-lg p-6 text-red-800">
+                                            <div className="mb-2">
+                                                <svg className="mx-auto h-12 w-12 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.314 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-medium mb-2">Error Loading Parts</h3>
+                                            <p className="mb-4">{partsError}</p>
+                                            <button
+                                                onClick={fetchAvailablePartItems}
+                                                className="inline-flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                                            >
+                                                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                </svg>
+                                                Try Again
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            {getFilteredAndSortedParts().length > 0 ? (
+                                                groupByCategory ? (
+                                                    // Grouped by Category View
+                                                    <div className="space-y-6 max-h-96 overflow-y-auto">
+                                                        {Object.entries(getGroupedPartsByCategory(getFilteredAndSortedParts())).map(([categoryName, categoryData]) => (
+                                                            <div key={categoryName} className="space-y-3">
+                                                                {/* Category Header */}
+                                                                <div className="flex items-center gap-3 pb-2 border-b border-gray-200">
+                                                                    {categoryData.categoryImage ? (
                                                                         <img 
-                                                                            src={part.img} 
-                                                                            alt={part.title}
-                                                                            className="w-12 h-12 object-cover rounded-lg border"
+                                                                            src={categoryData.categoryImage} 
+                                                                            alt={categoryName}
+                                                                            className="w-8 h-8 object-cover rounded-lg border"
                                                                             onError={(e) => {
                                                                                 e.currentTarget.style.display = 'none';
                                                                             }}
                                                                         />
                                                                     ) : (
-                                                                        <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
-                                                                            <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                                                                        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
+                                                                            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14-7H3a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2z" />
                                                                             </svg>
                                                                         </div>
                                                                     )}
+                                                                    <div>
+                                                                        <h3 className="text-lg font-semibold text-gray-900">{categoryName}</h3>
+                                                                        <p className="text-sm text-gray-500">{categoryData.parts.length} part{categoryData.parts.length !== 1 ? 's' : ''}</p>
+                                                                    </div>
                                                                 </div>
-                                                                
-                                                                <div className="flex-grow min-w-0">
-                                                                    <h4 className="font-medium text-gray-900 truncate">{part.title}</h4>
-                                                                    <p className="text-sm text-gray-600">{part.sku}</p>
-                                                                    
-                                                                    {/* Category and Groups */}
-                                                                    {part.categoryTitle && (
-                                                                        <p className="text-xs text-gray-500 mt-1">{part.categoryTitle}</p>
-                                                                    )}
-                                                                    {part.groups && part.groups.length > 0 && (
-                                                                        <div className="flex flex-wrap gap-1 mt-1">
-                                                                            {part.groups.slice(0, 2).map((group, index) => (
-                                                                                <span key={index} className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full">
-                                                                                    {group}
-                                                                                </span>
-                                                                            ))}
-                                                                            {part.groups.length > 2 && (
-                                                                                <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
-                                                                                    +{part.groups.length - 2}
-                                                                                </span>
-                                                                            )}
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            </div>
 
-                                                            {/* Badges */}
-                                                            <div className="flex items-center gap-2 mb-3">
-                                                                {part.tier && (
-                                                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTierBadgeClasses(part.tier)}`}>
-                                                                        {part.tier}
-                                                                    </span>
-                                                                )}
-                                                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                                                    isInStock ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                                                {/* Category Parts */}
+                                                                <div className={`${viewMode === 'grid' 
+                                                                    ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' 
+                                                                    : 'space-y-2'
                                                                 }`}>
-                                                                    {part.stockSummary || 'Unknown'}
-                                                                </span>
-                                                                {isAlreadyAdded && (
-                                                                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                                                        ✓ Selected
-                                                                    </span>
-                                                                )}
-                                                            </div>
+                                                                    {categoryData.parts.map(part => {
+                                                                        const isAlreadyAdded = editedBooking.partItems.some(p => p.id === part.id);
+                                                                        const isInStock = part.stockSummary?.toLowerCase().includes('in stock');
 
-                                                            {/* Pricing */}
-                                                            <div className="mb-3">
-                                                                <div className="text-lg font-bold text-gray-900">
-                                                                    £{part.priceForConsumer?.toFixed(2) ?? 'N/A'}
-                                                                </div>
-                                                                <div className="text-sm text-gray-500">
-                                                                    Cost: £{part.price?.toFixed(2) ?? 'N/A'}
+                                                                        return (
+                                                                            <div key={part.id} className={`border rounded-lg p-4 bg-white hover:shadow-md transition-shadow ${
+                                                                                isAlreadyAdded ? 'border-green-200 bg-green-50' : 'border-gray-200'
+                                                                            }`}>
+                                                                                {/* Part Image */}
+                                                                                <div className="flex items-start gap-3 mb-3">
+                                                                                    <div className="flex-shrink-0">
+                                                                                        {part.img ? (
+                                                                                            <img 
+                                                                                                src={part.img} 
+                                                                                                alt={part.title}
+                                                                                                className="w-12 h-12 object-cover rounded-lg border"
+                                                                                                onError={(e) => {
+                                                                                                    e.currentTarget.style.display = 'none';
+                                                                                                }}
+                                                                                            />
+                                                                                        ) : (
+                                                                                            <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
+                                                                                                <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                                                                                                </svg>
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+
+                                                                                    <div className="flex-grow min-w-0">
+                                                                                        <h4 className="font-medium text-gray-900 truncate">{part.title}</h4>
+                                                                                        <p className="text-sm text-gray-600">{part.sku}</p>
+                                                                                        
+                                                                                        {/* Groups */}
+                                                                                        {part.groups && part.groups.length > 0 && (
+                                                                                            <div className="flex flex-wrap gap-1 mt-1">
+                                                                                                {part.groups.slice(0, 2).map((group, index) => (
+                                                                                                    <span key={index} className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                                                                                        {group}
+                                                                                                    </span>
+                                                                                                ))}
+                                                                                                {part.groups.length > 2 && (
+                                                                                                    <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                                                                                                        +{part.groups.length - 2}
+                                                                                                    </span>
+                                                                                                )}
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                </div>
+
+                                                                                {/* Badges */}
+                                                                                <div className="flex items-center gap-2 mb-3">
+                                                                                    {part.tier && (
+                                                                                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTierBadgeClasses(part.tier)}`}>
+                                                                                            {part.tier}
+                                                                                        </span>
+                                                                                    )}
+                                                                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                                                                        isInStock ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                                                                    }`}>
+                                                                                        {part.stockSummary || 'Unknown'}
+                                                                                    </span>
+                                                                                </div>
+
+                                                                                {/* Pricing */}
+                                                                                <div className="mb-3">
+                                                                                    <div className="text-lg font-bold text-gray-900">
+                                                                                        £{part.priceForConsumer?.toFixed(2) ?? 'N/A'}
+                                                                                    </div>
+                                                                                    {isAdmin && part.price && (
+                                                                                        <div className="text-sm text-gray-500">
+                                                                                            Cost: £{part.price.toFixed(2)}
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+
+                                                                                {/* Action Button */}
+                                                                                <button
+                                                                                    onClick={() => {
+                                                                                        if (!isAlreadyAdded && isInStock) {
+                                                                                            setEditedBooking({
+                                                                                                ...editedBooking,
+                                                                                                partItems: [...editedBooking.partItems, part],
+                                                                                                partItemsPrices: {
+                                                                                                    ...editedBooking.partItemsPrices,
+                                                                                                    [part.id]: { price: part.priceForConsumer || 0 }
+                                                                                                }
+                                                                                            });
+                                                                                            toast.success(`Added ${part.title} to booking`);
+                                                                                        } else if (isAlreadyAdded) {
+                                                                                            toast.info(`${part.title} is already added`);
+                                                                                        } else {
+                                                                                            toast.warning(`${part.title} is not in stock`);
+                                                                                        }
+                                                                                    }}
+                                                                                    disabled={isAlreadyAdded || !isInStock}
+                                                                                    className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                                                                                        isAlreadyAdded 
+                                                                                            ? 'bg-green-100 text-green-800 cursor-not-allowed' 
+                                                                                            : !isInStock
+                                                                                                ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                                                                                                : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                                                                    }`}
+                                                                                >
+                                                                                    {isAlreadyAdded ? (
+                                                                                        <span className="flex items-center justify-center">
+                                                                                            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                                                                            </svg>
+                                                                                            Added
+                                                                                        </span>
+                                                                                    ) : !isInStock ? (
+                                                                                        'Out of Stock'
+                                                                                    ) : (
+                                                                                        <span className="flex items-center justify-center">
+                                                                                            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                                                                            </svg>
+                                                                                            Add to Booking
+                                                                                        </span>
+                                                                                    )}
+                                                                                </button>
+                                                                            </div>
+                                                                        );
+                                                                    })}
                                                                 </div>
                                                             </div>
+                                                        ) : (
+                                                            // Ungrouped View
+                                                            <div className={`${viewMode === 'grid' 
+                                                                ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' 
+                                                                : 'space-y-2'
+                                                            } max-h-96 overflow-y-auto`}>
+                                                                {getFilteredAndSortedParts().map(part => {
+                                                                    const isAlreadyAdded = editedBooking.partItems.some(p => p.id === part.id);
+                                                                    const isInStock = part.stockSummary?.toLowerCase().includes('in stock');
 
-                                                            {/* Action Button */}
+                                                                    return (
+                                                                        <div key={part.id} className={`border rounded-lg p-4 bg-white hover:shadow-md transition-shadow ${
+                                                                            isAlreadyAdded ? 'border-green-200 bg-green-50' : 'border-gray-200'
+                                                                        }`}>
+                                                                            {/* Part content similar to above */}
+                                                                            <div className="flex items-start gap-3 mb-3">
+                                                                                <div className="flex-shrink-0">
+                                                                                    {part.img ? (
+                                                                                        <img 
+                                                                                            src={part.img} 
+                                                                                            alt={part.title}
+                                                                                            className="w-12 h-12 object-cover rounded-lg border"
+                                                                                            onError={(e) => {
+                                                                                                e.currentTarget.style.display = 'none';
+                                                                                            }}
+                                                                                        />
+                                                                                    ) : (
+                                                                                        <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center">
+                                                                                            <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                                                                                            </svg>
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                                
+                                                                                <div className="flex-grow min-w-0">
+                                                                                    <h4 className="font-medium text-gray-900 truncate">{part.title}</h4>
+                                                                                    <p className="text-sm text-gray-600">{part.sku}</p>
+                                                                                    
+                                                                                    {/* Category and Groups */}
+                                                                                    {part.categoryTitle && (
+                                                                                        <p className="text-xs text-gray-500 mt-1">{part.categoryTitle}</p>
+                                                                                    )}
+                                                                                    {part.groups && part.groups.length > 0 && (
+                                                                                        <div className="flex flex-wrap gap-1 mt-1">
+                                                                                            {part.groups.slice(0, 2).map((group, index) => (
+                                                                                                <span key={index} className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                                                                                    {group}
+                                                                                                </span>
+                                                                                            ))}
+                                                                                            {part.groups.length > 2 && (
+                                                                                                <span className="inline-block px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                                                                                                    +{part.groups.length - 2}
+                                                                                                </span>
+                                                                                            )}
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+
+                                                                            {/* Badges */}
+                                                                            <div className="flex items-center gap-2 mb-3">
+                                                                                {part.tier && (
+                                                                                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getTierBadgeClasses(part.tier)}`}>
+                                                                                        {part.tier}
+                                                                                    </span>
+                                                                                )}
+                                                                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                                                                    isInStock ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                                                                }`}>
+                                                                                    {part.stockSummary || 'Unknown'}
+                                                                                </span>
+                                                                            </div>
+
+                                                                            {/* Pricing */}
+                                                                            <div className="mb-3">
+                                                                                <div className="text-lg font-bold text-gray-900">
+                                                                                    £{part.priceForConsumer?.toFixed(2) ?? 'N/A'}
+                                                                                </div>
+                                                                                {isAdmin && part.price && (
+                                                                                    <div className="text-sm text-gray-500">
+                                                                                        Cost: £{part.price.toFixed(2)}
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+
+                                                                            {/* Action Button */}
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    if (!isAlreadyAdded && isInStock) {
+                                                                                        setEditedBooking({
+                                                                                            ...editedBooking,
+                                                                                            partItems: [...editedBooking.partItems, part],
+                                                                                            partItemsPrices: {
+                                                                                                ...editedBooking.partItemsPrices,
+                                                                                                [part.id]: { price: part.priceForConsumer || 0 }
+                                                                                            }
+                                                                                        });
+                                                                                        toast.success(`Added ${part.title} to booking`);
+                                                                                    } else if (isAlreadyAdded) {
+                                                                                        toast.info(`${part.title} is already added`);
+                                                                                    } else {
+                                                                                        toast.warning(`${part.title} is not in stock`);
+                                                                                    }
+                                                                                }}
+                                                                                disabled={isAlreadyAdded || !isInStock}
+                                                                                className={`w-full py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
+                                                                                    isAlreadyAdded 
+                                                                                        ? 'bg-green-100 text-green-800 cursor-not-allowed' 
+                                                                                        : !isInStock
+                                                                                            ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                                                                                            : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                                                                }`}
+                                                                            >
+                                                                                {isAlreadyAdded ? (
+                                                                                    <span className="flex items-center justify-center">
+                                                                                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                                                                        </svg>
+                                                                                        Added
+                                                                                    </span>
+                                                                                ) : !isInStock ? (
+                                                                                    'Out of Stock'
+                                                                                ) : (
+                                                                                    <span className="flex items-center justify-center">
+                                                                                        <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                                                                        </svg>
+                                                                                        Add to Booking
+                                                                                    </span>
+                                                                                )}
+                                                                            </button>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )
+                                                    ) : (
+                                                        <div className="text-center border border-dashed border-gray-300 rounded-lg p-12">
+                                                            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                                        </svg>
+                                                        <h3 className="mt-4 text-lg font-medium text-gray-900">No parts found</h3>
+                                                        <p className="mt-2 text-gray-500">
+                                                            {partsSearchQuery || selectedTier !== 'all' || selectedCategory !== 'all' || selectedGroup !== 'all' || stockFilter !== 'all'
+                                                                ? 'Try adjusting your search criteria or filters.'
+                                                                : 'There are no parts available for this car.'
+                                                            }
+                                                        </p>
+                                                        {(partsSearchQuery || selectedTier !== 'all' || selectedCategory !== 'all' || selectedGroup !== 'all' || stockFilter !== 'all') && (
                                                             <button
-                                                                onClick={() => {
-                                                                    if (isAlreadyAdded) {
-                                                                        removePartFromBooking(part.id);
-                                                                    } else if (isInStock) {
-                                                                        addPartToBooking(part);
-                                                                    } else {
-                                                                        toast.warning(`${part.title} is not in stock`);
-                                                                    }
-                                                                }}
-                                                                disabled={!isInStock && !isAlreadyAdded}
-                                                                className={`w-full px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                                                    isAlreadyAdded 
-                                                                        ? 'bg-red-100 text-red-800 hover:bg-red-200'
-                                                                        : !isInStock
-                                                                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                                                                            : 'bg-indigo-600 text-white hover:bg-indigo-700'
-                                                                }`}
+                                                                onClick={resetFilters}
+                                                                className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                                                             >
-                                                                {isAlreadyAdded ? 'Remove from Booking' : !isInStock ? 'Out of Stock' : 'Add to Booking'}
+                                                                Clear All Filters
                                                             </button>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        )
-                                    ) : (
-                                        <div className="text-center border border-dashed border-gray-300 rounded-lg p-12">
-                                            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            </svg>
-                                            <h3 className="mt-4 text-lg font-medium text-gray-900">No parts found</h3>
-                                            <p className="mt-2 text-gray-500">
-                                                {partsSearchQuery || selectedTier !== 'all' || selectedCategory !== 'all' || selectedGroup !== 'all' || stockFilter !== 'all'
-                                                    ? 'Try adjusting your search criteria or filters.'
-                                                    : 'There are no parts available for this car.'
-                                                }
-                                            </p>
-                                            {(partsSearchQuery || selectedTier !== 'all' || selectedCategory !== 'all' || selectedGroup !== 'all' || stockFilter !== 'all') && (
-                                                <button
-                                                    onClick={resetFilters}
-                                                    className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                                                >
-                                                    Clear All Filters
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-                                </>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
                             )}
                         </div>
                     )}
@@ -2178,32 +2243,17 @@ export const BookingEditDialog = ({
                                     );
                                 })}
                                 <div className="border-t border-gray-300 pt-2 mt-3">
-                                    {(() => {
-                                        const partsSubtotal = Object.values(editedBooking.partItemsPrices || {})
-                                            .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0);
-                                        const partsVat = partsSubtotal * 0.20;
-                                        const partsTotal = partsSubtotal + partsVat;
-                                        
-                                        return (
-                                            <>
-                                                <div className="flex justify-between items-center text-sm">
-                                                    <span>Parts Subtotal:</span>
-                                                    <span>£{partsSubtotal.toFixed(2)}</span>
-                                                </div>
-                                                <div className="flex justify-between items-center text-sm">
-                                                    <span>VAT (20%):</span>
-                                                    <span>£{partsVat.toFixed(2)}</span>
-                                                </div>
-                                                <div className="flex justify-between items-center font-bold text-lg border-t border-gray-300 pt-2 mt-2">
-                                                    <span>Parts Total (inc. VAT):</span>
-                                                    <span>£{partsTotal.toFixed(2)}</span>
-                                                </div>
-                                                <div className="text-xs text-gray-500 text-right">
-                                                    {editedBooking.partItems.length} part{editedBooking.partItems.length !== 1 ? 's' : ''} selected
-                                                </div>
-                                            </>
-                                        );
-                                    })()}
+                                    <div className="flex justify-between items-center font-bold text-lg">
+                                        <span>Total Parts:</span>
+                                        <span>
+                                            £{Object.values(editedBooking.partItemsPrices || {})
+                                                .reduce((sum, priceObj) => sum + (priceObj.price || 0), 0)
+                                                .toFixed(2)}
+                                        </span>
+                                    </div>
+                                    <div className="text-xs text-gray-500 text-right">
+                                        {editedBooking.partItems.length} part{editedBooking.partItems.length !== 1 ? 's' : ''} selected
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2358,7 +2408,7 @@ export const BookingEditDialog = ({
 
                                 {editedBooking.schedules.length > 0 ? (
                                     <div className="space-y-3">
-                                        {editedBooking.schedules.map((schedule) => {
+                                        {editedBooking.schedules.map((schedule, index) => {
                                             const intervalDuration = getIntervalDuration(schedule.timeInterval);
                                             const requiredDuration = getTotalJobDuration();
                                             const isValidDuration = intervalDuration >= requiredDuration;

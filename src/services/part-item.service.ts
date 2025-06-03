@@ -1,63 +1,126 @@
-import { configApi } from "../api/configApi";
+import { AxiosError } from "axios";
+import { createAuthApi } from "../api/configApi";
 import { PartItemApiResponse, SinglePartItemApiResponse, CreatePartItemDto } from "../interfaces";
+import { toast } from "sonner";
 
 export class PartItemService {
-    private static BASE_URL = "/api/part-items"; // Updated to include /api prefix
-
-    static async getAllPartItems(token: string): Promise<PartItemApiResponse> {
+    static getAllPartItems = async (): Promise<PartItemApiResponse> => {
         try {
-            const response = await configApi.get<PartItemApiResponse>(
-                this.BASE_URL,
-                {
-                    headers: { Authorization: `Bearer ${token}` }
-                }
-            );
-            console.log("PartItemService.getAllPartItems response:", response.data);
-            return response.data;
-        } catch (error: any) {
-            console.error("Error fetching part items:", error);
-            const message = error.response?.data?.message || error.message || "Failed to fetch part items";
-            return { success: false, message, responseObject: [] };
-        }
-    }
+            // Create a new axios instance with auth headers embedded
+            const authApi = createAuthApi();
 
-    static async createPartItem(partData: CreatePartItemDto, token: string): Promise<SinglePartItemApiResponse> {
+            // Make request with authenticated API instance
+            const { data } = await authApi.get<PartItemApiResponse>("/api/part-items");
+            return data;
+        } catch (error) {
+            if (error instanceof AxiosError) {
+                console.error("API error in getAllPartItems:", error.response?.data);
+
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to view part items.");
+                    throw new Error("Authentication required");
+                }
+
+                throw new Error(error.response?.data?.message || "Error listing part items");
+            }
+            console.error("Unknown error in getAllPartItems:", error);
+            throw new Error("Error listing part items");
+        }
+    };
+
+    static getCarPartItems = async (carId: string): Promise<PartItemApiResponse> => {
         try {
-            const response = await configApi.post<SinglePartItemApiResponse>(
-                this.BASE_URL,
-                partData,
-                {
-                    headers: { Authorization: `Bearer ${token}` }
-                }
-            );
-            console.log("PartItemService.createPartItem response:", response.data);
-            return response.data;
-        } catch (error: any) {
-            console.error("Error creating part item:", error);
-            const message = error.response?.data?.message || error.message || "Failed to create part item";
-            return { success: false, message, responseObject: null as any }; // Return null object on failure
-        }
-    }
+            // Create a new axios instance with auth headers embedded
+            const authApi = createAuthApi();
 
-    static async deletePartItem(partItemId: string, token: string): Promise<{ success: boolean; message: string }> {
-        // Assuming soft delete or actual delete - adjust based on API
-        const url = `${this.BASE_URL}/${partItemId}`;
+            // Make request with car-specific endpoint
+            const { data } = await authApi.get<PartItemApiResponse>(`/api/part-items/car/${carId}/gold-in-stock`);
+            return data;
+        } catch (error) {
+            if (error instanceof AxiosError) {
+                console.error("API error in getCarPartItems:", error.response?.data);
+
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to view car part items.");
+                    throw new Error("Authentication required");
+                }
+
+                throw new Error(error.response?.data?.message || "Error listing car part items");
+            }
+            console.error("Unknown error in getCarPartItems:", error);
+            throw new Error("Error listing car part items");
+        }
+    };
+
+    static createPartItem = async (partData: CreatePartItemDto): Promise<SinglePartItemApiResponse> => {
         try {
-            // Using DELETE method for example
-            const response = await configApi.delete<{ success: boolean; message: string }>(
-                url,
-                {
-                    headers: { Authorization: `Bearer ${token}` }
-                }
-            );
-            console.log("PartItemService.deletePartItem response:", response.data);
-            return response.data;
-        } catch (error: any) {
-            console.error(`Error deleting part item ${partItemId}:`, error);
-            const message = error.response?.data?.message || error.message || "Failed to delete part item";
-            return { success: false, message };
-        }
-    }
+            // Create a new axios instance with auth headers embedded
+            const authApi = createAuthApi();
 
-    // Add updatePartItem if needed later
+            // Make request with authenticated API instance
+            const { data } = await authApi.post<SinglePartItemApiResponse>("/api/part-items", partData);
+            return data;
+        } catch (error) {
+            if (error instanceof AxiosError) {
+                console.error("API error in createPartItem:", error.response?.data);
+
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to create a part item.");
+                    throw new Error("Authentication required");
+                }
+
+                throw new Error(error.response?.data?.message || "Error creating part item");
+            }
+            console.error("Unknown error in createPartItem:", error);
+            throw new Error("Error creating part item");
+        }
+    };
+
+    static deletePartItem = async (partItemId: string): Promise<{ success: boolean; message: string }> => {
+        try {
+            // Create a new axios instance with auth headers embedded
+            const authApi = createAuthApi();
+
+            // Make request with authenticated API instance
+            const { data } = await authApi.delete<{ success: boolean; message: string }>(`/api/part-items/${partItemId}`);
+            return data;
+        } catch (error) {
+            if (error instanceof AxiosError) {
+                console.error("API error in deletePartItem:", error.response?.data);
+
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to delete a part item.");
+                    throw new Error("Authentication required");
+                }
+
+                throw new Error(error.response?.data?.message || "Error deleting part item");
+            }
+            console.error("Unknown error in deletePartItem:", error);
+            throw new Error("Error deleting part item");
+        }
+    };
+
+    static importPartsFromGsf = async (carNumber: string): Promise<{ success: boolean; message: string }> => {
+        try {
+            // Create a new axios instance with auth headers embedded
+            const authApi = createAuthApi();
+
+            // Make request with authenticated API instance
+            const { data } = await authApi.post<{ success: boolean; message: string }>(`/api/part-items/import/gsf/${carNumber}`);
+            return data;
+        } catch (error) {
+            if (error instanceof AxiosError) {
+                console.error("API error in importPartsFromGsf:", error.response?.data);
+
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to import parts.");
+                    throw new Error("Authentication required");
+                }
+
+                throw new Error(error.response?.data?.message || "Error importing parts from GSF");
+            }
+            console.error("Unknown error in importPartsFromGsf:", error);
+            throw new Error("Error importing parts from GSF");
+        }
+    };
 } 

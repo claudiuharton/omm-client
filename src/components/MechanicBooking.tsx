@@ -4,8 +4,15 @@ import { useJobStore } from "../stores";
 import { Booking as BookingObj } from "../interfaces/booking.interface.ts";
 import { useMemo, useCallback } from "react";
 import { useAuthStore } from "../stores";
+import { RiEditLine } from "react-icons/ri";
 
-export const MechanicBooking = ({ item }: { item: BookingObj }) => {
+export const MechanicBooking = ({ 
+    item, 
+    onEdit 
+}: { 
+    item: BookingObj;
+    onEdit?: (booking: BookingObj) => void;
+}) => {
     const [confirmOpen, setConfirmOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [action, setAction] = useState<'assign' | 'unassign' | null>(null);
@@ -24,13 +31,16 @@ export const MechanicBooking = ({ item }: { item: BookingObj }) => {
 
     const jobs = useMemo(() => {
         return item.jobs?.map(job => ({
-            ...job, pricePerHour: item.jobsPrices[job.id].price, duration: item.jobsPrices[job.id].duration
+            ...job, 
+            pricePerHour: item.jobsPrices?.[job.id]?.price || 0, 
+            duration: item.jobsPrices?.[job.id]?.duration || job.duration || 0
         }));
     }, [item.jobs, item.jobsPrices]);
 
     const partItems = useMemo(() => {
         return item.partItems?.map(partItem => ({
-            ...partItem, price: item.partItemsPrices[partItem.id].price
+            ...partItem, 
+            price: item.partItemsPrices?.[partItem.id]?.price || 0
         }));
     }, [item.partItems, item.partItemsPrices]);
 
@@ -39,13 +49,27 @@ export const MechanicBooking = ({ item }: { item: BookingObj }) => {
     }, [jobs]);
 
     const totalParts = useMemo(() => {
-        return parseFloat((partItems?.reduce((acc, partItem) => acc + partItem.price, 0) || 0).toFixed(2));
-    }, [partItems]);
+        // Calculate directly from partItemsPrices object
+        const partsTotal = Object.values(item.partItemsPrices || {})
+            .reduce((acc, priceObj) => acc + (priceObj?.price || 0), 0);
+        return parseFloat(partsTotal.toFixed(2));
+    }, [item.partItemsPrices]);
+
+    // Calculate parts cost with 20% VAT
+    const partsWithVAT = useMemo(() => {
+        return parseFloat((totalParts * 1.2).toFixed(2));
+    }, [totalParts]);
 
     const handleAssignment = useCallback(async (assign: boolean) => {
         setAction(assign ? 'assign' : 'unassign');
         setConfirmOpen(true);
     }, []);
+
+    const handleEditBooking = useCallback(() => {
+        if (onEdit) {
+            onEdit(item);
+        }
+    }, [onEdit, item]);
 
     const confirmAssignment = useCallback(async () => {
         if (!action) return;
@@ -92,6 +116,19 @@ export const MechanicBooking = ({ item }: { item: BookingObj }) => {
                     </span>
                 )}
             </div>
+
+            {/* Edit button - only show for assigned bookings that are not paid */}
+            {onEdit && isAssignedToMe && item.status !== 'paid' && (
+                <div className="absolute left-2 top-2">
+                    <button
+                        onClick={handleEditBooking}
+                        className="bg-blue-500 hover:bg-blue-600 text-white p-1.5 rounded-full transition-colors"
+                        title="Edit Booking"
+                    >
+                        <RiEditLine size={14} />
+                    </button>
+                </div>
+            )}
 
             <div className="flex flex-col items-center gap-2">
                 <h5 className="uppercase font-medium">{item.status}</h5>
@@ -148,12 +185,12 @@ export const MechanicBooking = ({ item }: { item: BookingObj }) => {
                     </p>
                     <p className="text-gray-700 font-bold px-3 py-1.5 rounded-xl text-center">
                         Item parts cost (incl. VAT): <span
-                            className="font-normal capitalize text-gray-900">£{(totalParts * 1.2).toFixed(2)}</span>
+                            className="font-normal capitalize text-gray-900">£{partsWithVAT.toFixed(2)}</span>
                     </p>
 
                     <p className="text-gray-700 font-bold px-3 py-1.5 rounded-xl text-center">
                         Total (incl. VAT): <span
-                            className="font-normal capitalize text-gray-900">£{item.totalPrice}</span>
+                            className="font-normal capitalize text-gray-900">£{item.totalPrice.toFixed(2)}</span>
                     </p>
                 </div>
                 <p className="text-gray-700 font-bold px-3 py-1.5 rounded-xl text-center">

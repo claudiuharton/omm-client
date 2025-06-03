@@ -2,7 +2,7 @@ import { AxiosError } from "axios";
 import { createAuthApi, getAuthToken } from "../api/configApi";
 import { JobResponse } from "../interfaces/job.interface.ts";
 import { PartItemResponse } from "../interfaces/partItem.interface.ts";
-import { BookingResponse, BookingRequest } from "../interfaces/booking.interface.ts";
+import { BookingResponse, BookingRequest, BookingUpdateRequest } from "../interfaces/booking.interface.ts";
 import { toast } from "sonner";
 import axios from "axios";
 
@@ -258,14 +258,40 @@ export class JobService {
      */
     static getAllPartItems = async (): Promise<PartItemResponse> => {
         try {
+            console.log('🔧 JobService.getAllPartItems - Starting general parts request');
+            console.log('🔧 JobService.getAllPartItems - This should only be called as fallback!');
+            
             // Create a new axios instance with auth headers embedded
             const authApi = createAuthApi();
+            console.log('🔧 JobService.getAllPartItems - Created authApi instance');
+
+            const endpoint = "/api/parts";
+            console.log('🔧 JobService.getAllPartItems - Endpoint:', endpoint);
+            console.log('🔧 JobService.getAllPartItems - Complete URL:', `${import.meta.env.VITE_BACKEND_URL}${endpoint}`);
 
             // Make request with dedicated auth API instance
-            const { data } = await authApi.get<PartItemResponse>("/api/part-items");
+            console.log('🚀 JobService.getAllPartItems - Making GET request to:', endpoint);
+            const requestStart = Date.now();
+            
+            const { data } = await authApi.get<PartItemResponse>(endpoint);
+            
+            const requestEnd = Date.now();
+            console.log('✅ JobService.getAllPartItems - Request completed in:', requestEnd - requestStart, 'ms');
+            console.log('✅ JobService.getAllPartItems - Response data:', data);
+            
             return data;
         } catch (error) {
+            console.error('❌ JobService.getAllPartItems - Error occurred:', error);
+            
             if (error instanceof AxiosError) {
+                console.error('❌ JobService.getAllPartItems - Axios error details:', {
+                    status: error.response?.status,
+                    statusText: error.response?.statusText,
+                    data: error.response?.data,
+                    url: error.config?.url,
+                    method: error.config?.method
+                });
+                
                 if (error.response?.status === 401) {
                     toast.error("Authentication required to view part items.");
                     throw new Error("Authentication required");
@@ -275,6 +301,60 @@ export class JobService {
             }
             console.error("Unknown error in getAllPartItems:", error);
             throw new Error("Error getting part items");
+        }
+    };
+
+    /**
+     * Get part items for a specific car
+     */
+    static getCarPartItems = async (carId: string): Promise<PartItemResponse> => {
+        try {
+            console.log('🔧 JobService.getCarPartItems - Starting with carId:', carId);
+            console.log('🔧 JobService.getCarPartItems - carId type:', typeof carId);
+            console.log('🔧 JobService.getCarPartItems - carId length:', carId?.length);
+            
+            // Create a new axios instance with auth headers embedded
+            const authApi = createAuthApi();
+            console.log('🔧 JobService.getCarPartItems - Created authApi instance');
+            
+            const endpoint = `/api/parts/car/${carId}/gold-in-stock`;
+            console.log('🔧 JobService.getCarPartItems - Full endpoint URL:', endpoint);
+            console.log('🔧 JobService.getCarPartItems - Base URL:', import.meta.env.VITE_BACKEND_URL);
+            console.log('🔧 JobService.getCarPartItems - Complete URL:', `${import.meta.env.VITE_BACKEND_URL}${endpoint}`);
+
+            // Make request with car-specific endpoint
+            console.log('🚀 JobService.getCarPartItems - Making GET request to:', endpoint);
+            const requestStart = Date.now();
+            
+            const { data } = await authApi.get<PartItemResponse>(endpoint);
+            
+            const requestEnd = Date.now();
+            console.log('✅ JobService.getCarPartItems - Request completed in:', requestEnd - requestStart, 'ms');
+            console.log('✅ JobService.getCarPartItems - Response data:', data);
+            
+            return data;
+        } catch (error) {
+            console.error('❌ JobService.getCarPartItems - Error occurred:', error);
+            
+            if (error instanceof AxiosError) {
+                console.error('❌ JobService.getCarPartItems - Axios error details:', {
+                    status: error.response?.status,
+                    statusText: error.response?.statusText,
+                    data: error.response?.data,
+                    url: error.config?.url,
+                    method: error.config?.method,
+                    headers: error.config?.headers
+                });
+                
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to view car part items.");
+                    throw new Error("Authentication required");
+                }
+                console.error("API error in getCarPartItems:", error.response?.data);
+                throw new Error(error.response?.data || "Error getting car part items");
+            }
+            console.error("Unknown error in getCarPartItems:", error);
+            throw new Error("Error getting car part items");
         }
     };
 
@@ -354,6 +434,32 @@ export class JobService {
             }
             console.error("Unknown error in addBooking:", error);
             throw new Error("Error adding booking");
+        }
+    };
+
+    /**
+     * Update an existing booking
+     */
+    static updateBooking = async (id: string, booking: BookingUpdateRequest): Promise<BookingResponse> => {
+        try {
+            const authApi = createAuthApi();
+            const { data } = await authApi.put<BookingResponse>(`/api/bookings/${id}`, booking);
+            return data;
+        } catch (error) {
+            if (error instanceof AxiosError) {
+                if (error.response?.status === 401) {
+                    toast.error("Authentication required to update booking.");
+                    throw new Error("Authentication required");
+                }
+                if (error.response?.status === 404) {
+                    toast.error("Booking not found.");
+                    throw new Error("Booking not found");
+                }
+                console.error("API error in updateBooking:", error.response?.data);
+                throw new Error(error.response?.data?.message || "Error updating booking");
+            }
+            console.error("Unknown error in updateBooking:", error);
+            throw new Error("Error updating booking");
         }
     };
 

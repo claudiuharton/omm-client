@@ -2,13 +2,13 @@ export interface PartItem {
     id: string;
     title: string;
     sku: string;
-    name: string;
+    name?: string;
     description?: string;
     itemCode?: string;
     tier: string;
     top?: string[];
-    price: number;
-    priceForConsumer: number;
+    price?: number;
+    priceForConsumer?: number;
     stockSummary?: string;
     stocksData?: {
         Local: number;
@@ -19,6 +19,15 @@ export interface PartItem {
     info?: any;
     category?: number;
     createdAt?: string;
+    
+    categoryTitle?: string;
+    categoryImage?: string;
+    img?: string;
+    companyImg?: string;
+    groups?: string[];
+    fitment?: string | null;
+    capacity?: string | null;
+    updatedAt?: string;
 }
 
 export interface PartItemResponse {

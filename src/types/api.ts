@@ -1271,7 +1271,51 @@ export interface paths {
             requestBody?: {
                 content: {
                     "application/json": {
-                        location?: string;
+                        selectedJobs?: string[];
+                        totalPrice?: number;
+                        partItemsPrices?: {
+                            /** Format: uuid */
+                            id: string;
+                            price: number;
+                        }[];
+                        status?: "pending" | "accepted" | "completed" | "open" | "canceled" | "authorized" | "expired" | "failed" | "paid";
+                        /** Format: uuid */
+                        clientId?: string;
+                        /** Format: uuid */
+                        mechanicId?: string;
+                        /** Format: uuid */
+                        carId?: string;
+                        pendingJobs?: {
+                            /** Format: uuid */
+                            id: string;
+                            description: string;
+                            estimatedTime: number;
+                            estimatedCost: number;
+                        }[];
+                        jobs?: {
+                            /** Format: uuid */
+                            id: string;
+                            jobName: string;
+                            timeRequired: number;
+                            status: string;
+                        }[];
+                        location?: {
+                            /** Format: uuid */
+                            id?: string;
+                            address: string;
+                            city: string;
+                            postalCode: string;
+                            state?: string;
+                            country: string;
+                            latitude?: number;
+                            longitude?: number;
+                        };
+                        schedules?: {
+                            /** Format: uuid */
+                            id?: string;
+                            timeInterval: string;
+                            dates?: string[];
+                        }[];
                     };
                 };
             };

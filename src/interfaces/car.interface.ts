@@ -12,6 +12,11 @@ export interface Car {
     tecDocKType: string,
     vin: string,
 
+    // Parts processing fields
+    partsProcessed?: number,
+    totalPartsToProcess?: number,
+    partsImportStatus?: 'idle' | 'importing' | 'completed' | 'failed',
+
     // Additional fields from UKVD API for direct access
     colour?: string,
     fuelType?: string,

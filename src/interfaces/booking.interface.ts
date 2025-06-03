@@ -14,7 +14,7 @@ export interface Booking {
     jobs: Job[],
     location: { postalCode: string }
     schedules: TimeSlot[],
-    jobsPrices: { id: string, price: number, duration: number }[],
+    jobsPrices: Record<string, { price: number, duration: number }>,
     partItemsPrices: Record<string, { price: number }>,
     partItems: PartItem[]
     totalPrice: number,
@@ -36,9 +36,60 @@ export interface BookingResponse {
 }
 
 export interface BookingRequest {
-    timeSlots: TimeSlot[];
-    jobs: Job[];
-    partItems: PartItem[];
+    timeSlots: {
+        date: string;
+        time: string;
+    }[];
+    jobs: {
+        id: string;
+        duration: number;
+        price: number;
+    }[];
+    partItems: {
+        id: string;
+        price: number;
+    }[];
     postalCode: string;
     selectedCar: string | null;
+}
+
+// Interface for updating bookings - matches the API response structure
+export interface BookingUpdateRequest {
+    selectedJobs?: string[];
+    totalPrice?: number;
+    partItemsPrices?: {
+        id: string;
+        price: number;
+    }[];
+    status?: "pending" | "accepted" | "completed" | "open" | "canceled" | "authorized" | "expired" | "failed" | "paid";
+    clientId?: string;
+    mechanicId?: string;
+    carId?: string;
+    pendingJobs?: {
+        id: string;
+        description: string;
+        estimatedTime: number;
+        estimatedCost: number;
+    }[];
+    jobs?: {
+        id: string;
+        jobName: string;
+        timeRequired: number;
+        status: string;
+    }[];
+    location?: {
+        id?: string;
+        address: string;
+        city: string;
+        postalCode: string;
+        state?: string;
+        country: string;
+        latitude?: number;
+        longitude?: number;
+    };
+    schedules?: {
+        id?: string;
+        timeInterval: string;
+        dates?: string[];
+    }[];
 }

@@ -2,7 +2,9 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useAuthStore, useJobStore } from "../stores";
 import { Loader } from "../components/Loader";
 import { MechanicBooking } from "../components/MechanicBooking";
+import { BookingEditDialog } from "../components/BookingEditDialog";
 import { Booking as BookingObj } from "../interfaces/booking.interface";
+import { toast } from "sonner";
 
 /**
  * EmptyState component for when there are no items to display
@@ -43,6 +45,10 @@ export const MechanicDashboard = () => {
     // Component state
     const [isLoading, setIsLoading] = useState(true); // Assume loading until we know auth status
     const [error, setError] = useState<string | null>(null);
+    
+    // Edit booking state
+    const [isEditBookingDialogOpen, setIsEditBookingDialogOpen] = useState(false);
+    const [selectedBookingForEdit, setSelectedBookingForEdit] = useState<BookingObj | null>(null);
 
     // Refs
     const isMountedRef = useRef(true);
@@ -54,6 +60,7 @@ export const MechanicDashboard = () => {
     const bookings = useJobStore(state => state.bookings);
     const user = useAuthStore(state => state.user);
     const status = useAuthStore(state => state.status);
+    const updateBooking = useJobStore(state => state.updateBooking);
 
     // --- Callbacks ---
     const fetchDataInternal = useCallback(async () => {
@@ -94,6 +101,18 @@ export const MechanicDashboard = () => {
         dataFetchedRef.current = false;
         fetchDataInternal();
     }, [fetchDataInternal]);
+
+    // Edit booking handlers
+    const handleEditBooking = useCallback((booking: BookingObj) => {
+        console.log("Selected booking for edit:", booking);
+        setSelectedBookingForEdit(booking);
+        setIsEditBookingDialogOpen(true);
+    }, []);
+
+    const handleCloseEditBookingDialog = useCallback(() => {
+        setIsEditBookingDialogOpen(false);
+        setSelectedBookingForEdit(null);
+    }, []);
 
     // --- Effects ---
 
@@ -162,9 +181,9 @@ export const MechanicDashboard = () => {
     }
 
     // Group bookings by assignment status
-    const myBookings = bookings.filter(booking => booking.mechanicId === user?.id);
-    const availableBookings = bookings.filter(booking => !booking.mechanicId);
-    const otherBookings = bookings.filter(booking => booking.mechanicId && booking.mechanicId !== user?.id);
+    const myBookings = bookings.filter(booking => booking.mechanic?.id === user?.id);
+    const availableBookings = bookings.filter(booking => !booking.mechanic?.id);
+    const otherBookings = bookings.filter(booking => booking.mechanic?.id && booking.mechanic.id !== user?.id);
 
     // Authorized, not loading, no error: Render main content
     console.log('Render: Main Content');
@@ -184,7 +203,11 @@ export const MechanicDashboard = () => {
                     <h2 className="text-xl font-bold text-gray-800 mb-4">My Jobs</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {myBookings.map((item: BookingObj) => (
-                            <MechanicBooking key={item.id} item={item} />
+                            <MechanicBooking 
+                                key={item.id} 
+                                item={item} 
+                                onEdit={handleEditBooking}
+                            />
                         ))}
                     </div>
                 </div>
@@ -196,7 +219,11 @@ export const MechanicDashboard = () => {
                 {availableBookings.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {availableBookings.map((item: BookingObj) => (
-                            <MechanicBooking key={item.id} item={item} />
+                            <MechanicBooking 
+                                key={item.id} 
+                                item={item} 
+                                onEdit={handleEditBooking}
+                            />
                         ))}
                     </div>
                 ) : (
@@ -212,7 +239,11 @@ export const MechanicDashboard = () => {
                     <h2 className="text-xl font-bold text-gray-800 mb-4">Other Mechanics' Jobs</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {otherBookings.map((item: BookingObj) => (
-                            <MechanicBooking key={item.id} item={item} />
+                            <MechanicBooking 
+                                key={item.id} 
+                                item={item} 
+                                onEdit={handleEditBooking}
+                            />
                         ))}
                     </div>
                 </div>
@@ -220,6 +251,54 @@ export const MechanicDashboard = () => {
 
             {/* Empty state if no jobs at all */}
             {bookings.length === 0 && <EmptyState />}
+
+            {/* Edit Booking Dialog */}
+            {isEditBookingDialogOpen && selectedBookingForEdit && (
+                <BookingEditDialog
+                    isOpen={isEditBookingDialogOpen}
+                    onClose={handleCloseEditBookingDialog}
+                    booking={selectedBookingForEdit}
+                    isAdmin={false} // Mechanics are not admins
+                    onSave={async (updatedBooking: BookingObj) => {
+                        try {
+                            // Transform the updated booking to the format expected by the API
+                            const bookingUpdateRequest = {
+                                // Transform timeSlots: from {timeInterval, dates[]} to {date, time}[]
+                                timeSlots: updatedBooking.schedules?.flatMap(schedule => 
+                                    schedule.dates.map(date => ({
+                                        date: date,
+                                        time: schedule.timeInterval
+                                    }))
+                                ) || [],
+                                // Transform jobs: use the format expected by BookingUpdateRequest
+                                jobs: updatedBooking.jobs?.map(job => ({
+                                    id: job.id,
+                                    duration: job.duration,
+                                    price: updatedBooking.jobsPrices?.[job.id]?.price || 0
+                                })) || [],
+                                // Transform partItems: use the price from partItemsPrices
+                                partItems: updatedBooking.partItems?.map(part => ({
+                                    id: part.id,
+                                    price: updatedBooking.partItemsPrices?.[part.id]?.price || part.priceForConsumer || 0
+                                })) || [],
+                                postalCode: updatedBooking.location?.postalCode || '',
+                                status: updatedBooking.status as "pending" | "accepted" | "completed" | "open" | "canceled" | "authorized" | "expired" | "failed" | "paid"
+                            };
+                            
+                            // Use the existing updateBooking from jobStore
+                            await updateBooking(updatedBooking.id, bookingUpdateRequest);
+                            toast.success(`Booking updated successfully`);
+                            // Success - let the BookingEditDialog close the modal
+                        } catch (error: any) {
+                            console.error('Error updating booking:', error);
+                            const errorMsg = error instanceof Error ? error.message : "Failed to update booking";
+                            toast.error(errorMsg);
+                            // Re-throw the error so BookingEditDialog knows to keep the modal open
+                            throw error;
+                        }
+                    }}
+                />
+            )}
         </div>
     );
 }; 

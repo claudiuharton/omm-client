@@ -4,6 +4,7 @@ export interface Job {
     description?: string;
     duration: number;
     basePrice?: number;
+    pricePerHour?: number;
     category?: string;
     createdAt?: string;
     searchQuery?: string;
