@@ -445,18 +445,13 @@ export const ManageParts = () => {
     const [viewMode, setViewMode] = useState<'all' | 'active' | 'deleted'>('active');
 
     const isMountedRef = useRef(true);
-    const { token } = useAuthStore();
 
     // Fetch Data
     const fetchDataInternal = useCallback(async () => {
-        if (!token) {
-            setError("Authentication token not found.");
-            return;
-        }
         setIsLoading(true);
         setError(null);
         try {
-            const response = await PartItemService.getAllPartItems(token);
+            const response = await PartItemService.getAllPartItems();
             if (isMountedRef.current) {
                 if (response.success && response.responseObject) {
                     setParts(response.responseObject);
@@ -472,7 +467,7 @@ export const ManageParts = () => {
         } finally {
             if (isMountedRef.current) setIsLoading(false);
         }
-    }, [token]);
+    }, []);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -482,12 +477,9 @@ export const ManageParts = () => {
 
     // Save New Part
     const handleSavePart = async (newPartData: CreatePartItemDto) => {
-        if (!token) {
-            toast.error("Authentication failed."); return;
-        }
         try {
             setIsLoading(true);
-            const response = await PartItemService.createPartItem(newPartData, token);
+            const response = await PartItemService.createPartItem(newPartData);
             if (response.success && response.responseObject) {
                 toast.success(response.message || "Part added successfully!");
                 fetchDataInternal(); // Refresh list
@@ -510,8 +502,8 @@ export const ManageParts = () => {
     };
 
     const handleConfirmDelete = async () => {
-        if (!selectedPartId || !token) {
-            toast.error("Cannot delete part: Missing ID or authentication.");
+        if (!selectedPartId) {
+            toast.error("Cannot delete part: Missing ID.");
             setIsConfirmDeleteDialogOpen(false);
             return;
         }

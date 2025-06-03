@@ -5,7 +5,7 @@ import { Car } from "../components/Car";
 import { Booking } from "../components/Booking";
 import { Loader } from "../components/Loader";
 import { BookingEditDialog } from "../components/BookingEditDialog";
-import { Booking as BookingObj } from "../interfaces/booking.interface";
+import { Booking as BookingObj, BookingRequest } from "../interfaces/booking.interface";
 import { Car as CarObj } from "../interfaces/car.interface";
 import { toast } from "sonner";
 
@@ -61,6 +61,10 @@ export const HomePage = () => {
     const [isAddJobDialogOpen, setIsAddJobDialogOpen] = useState(false);
     const [selectedCarForJob, setSelectedCarForJob] = useState<CarObj | null>(null);
     const [hasRedirected, setHasRedirected] = useState(false);
+    
+    // Edit booking state
+    const [isEditBookingDialogOpen, setIsEditBookingDialogOpen] = useState(false);
+    const [selectedBookingForEdit, setSelectedBookingForEdit] = useState<BookingObj | null>(null);
 
     // Refs
     const isMountedRef = useRef(true);
@@ -79,7 +83,8 @@ export const HomePage = () => {
     const bookings = useJobStore(state => state.bookings);
     const user = useAuthStore(state => state.user);
     const status = useAuthStore(state => state.status);
-    const createBooking = useJobStore(state => state.createBooking);
+    const addBooking = useJobStore(state => state.addBooking);
+    const updateBooking = useJobStore(state => state.updateBooking);
 
     // --- Callbacks ---
     const handleAddCar = useCallback(() => navigate("/new-car"), [navigate]);
@@ -93,6 +98,18 @@ export const HomePage = () => {
     const handleCloseAddJobDialog = useCallback(() => {
         setIsAddJobDialogOpen(false);
         setSelectedCarForJob(null); // Optionally clear selection on close
+    }, []);
+
+    // Edit booking handlers
+    const handleEditBooking = useCallback((booking: BookingObj) => {
+        console.log("Selected booking for edit:", booking);
+        setSelectedBookingForEdit(booking);
+        setIsEditBookingDialogOpen(true);
+    }, []);
+
+    const handleCloseEditBookingDialog = useCallback(() => {
+        setIsEditBookingDialogOpen(false);
+        setSelectedBookingForEdit(null);
     }, []);
 
     const fetchDataInternal = useCallback(async () => {
@@ -237,7 +254,11 @@ export const HomePage = () => {
                     <h2 className="text-2xl font-bold text-gray-800 mb-6">Your Bookings</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {bookings.map((item: BookingObj) => (
-                            <Booking key={item.id} item={item} />
+                            <Booking 
+                                key={item.id} 
+                                item={item} 
+                                onEdit={handleEditBooking}
+                            />
                         ))}
                     </div>
                 </div>
@@ -249,19 +270,108 @@ export const HomePage = () => {
                     isOpen={isAddJobDialogOpen}
                     onClose={handleCloseAddJobDialog}
                     booking={null} // Pass null to indicate this is a new booking
-                    onSave={(newBooking) => {
-                        // Use the existing createBooking from jobStore
-                        createBooking(newBooking)
-                            .then(() => {
-                                toast.success(`Booking created for ${selectedCarForJob.make} ${selectedCarForJob.model}`);
-                                handleCloseAddJobDialog();
-                            })
-                            .catch((error) => {
-                                const errorMsg = error instanceof Error ? error.message : "Failed to create booking";
-                                toast.error(errorMsg);
-                            });
+                    onSave={async (newBooking: BookingObj) => {
+                        // Validate required fields before API call
+                        if (!newBooking.jobs || newBooking.jobs.length === 0) {
+                            toast.error("Please select at least one job for the booking");
+                            throw new Error("Please select at least one job for the booking");
+                        }
+                        
+                        if (!newBooking.schedules || newBooking.schedules.length === 0) {
+                            toast.error("Please add at least one schedule for the booking");
+                            throw new Error("Please add at least one schedule for the booking");
+                        }
+                        
+                        if (!newBooking.location?.postalCode) {
+                            toast.error("Please set a postal code in the Location tab");
+                            throw new Error("Please set a postal code in the Location tab");
+                        }
+                        
+                        // Transform Booking to BookingRequest format to match API schema
+                        const bookingRequest: BookingRequest = {
+                            // Transform timeSlots: from {timeInterval, dates[]} to {date, time}[]
+                            timeSlots: newBooking.schedules?.flatMap(schedule => 
+                                schedule.dates.map(date => ({
+                                    date: date,
+                                    time: schedule.timeInterval
+                                }))
+                            ) || [],
+                            // Transform jobs: add price field calculated from pricePerHour * duration / 60
+                            jobs: newBooking.jobs?.map(job => ({
+                                id: job.id,
+                                duration: job.duration,
+                                price: job.pricePerHour ? (job.pricePerHour * job.duration) / 60 : 0
+                            })) || [],
+                            // Transform partItems: change priceForConsumer to price
+                            partItems: newBooking.partItems?.map(part => ({
+                                id: part.id,
+                                price: part.priceForConsumer || 0
+                            })) || [],
+                            postalCode: newBooking.location?.postalCode || '',
+                            selectedCar: selectedCarForJob.id
+                        };
+                        
+                        try {
+                            // Use the existing addBooking from jobStore
+                            await addBooking(bookingRequest);
+                            toast.success(`Booking created for ${selectedCarForJob.make} ${selectedCarForJob.model}`);
+                            // Success - let the BookingEditDialog close the modal
+                        } catch (error: any) {
+                            console.error('Error creating booking:', error);
+                            const errorMsg = error instanceof Error ? error.message : "Failed to create booking";
+                            toast.error(errorMsg);
+                            // Re-throw the error so BookingEditDialog knows to keep the modal open
+                            throw error;
+                        }
                     }}
                     carId={selectedCarForJob.id} // Pass the car ID for the new booking
+                />
+            )}
+
+            {/* Edit Booking Dialog */}
+            {isEditBookingDialogOpen && selectedBookingForEdit && (
+                <BookingEditDialog
+                    isOpen={isEditBookingDialogOpen}
+                    onClose={handleCloseEditBookingDialog}
+                    booking={selectedBookingForEdit}
+                    onSave={async (updatedBooking: BookingObj) => {
+                        try {
+                            // Transform the updated booking to the format expected by the API
+                            const bookingUpdateRequest = {
+                                // Transform timeSlots: from {timeInterval, dates[]} to {date, time}[]
+                                timeSlots: updatedBooking.schedules?.flatMap(schedule => 
+                                    schedule.dates.map(date => ({
+                                        date: date,
+                                        time: schedule.timeInterval
+                                    }))
+                                ) || [],
+                                // Transform jobs: use the format expected by BookingUpdateRequest
+                                jobs: updatedBooking.jobs?.map(job => ({
+                                    id: job.id,
+                                    duration: job.duration,
+                                    price: updatedBooking.jobsPrices?.[job.id]?.price || 0
+                                })) || [],
+                                // Transform partItems: use the price from partItemsPrices
+                                partItems: updatedBooking.partItems?.map(part => ({
+                                    id: part.id,
+                                    price: updatedBooking.partItemsPrices?.[part.id]?.price || part.priceForConsumer || 0
+                                })) || [],
+                                postalCode: updatedBooking.location?.postalCode || '',
+                                status: updatedBooking.status as "pending" | "accepted" | "completed" | "open" | "canceled" | "authorized" | "expired" | "failed" | "paid"
+                            };
+                            
+                            // Use the existing updateBooking from jobStore
+                            await updateBooking(updatedBooking.id, bookingUpdateRequest);
+                            toast.success(`Booking updated successfully`);
+                            // Success - let the BookingEditDialog close the modal
+                        } catch (error: any) {
+                            console.error('Error updating booking:', error);
+                            const errorMsg = error instanceof Error ? error.message : "Failed to update booking";
+                            toast.error(errorMsg);
+                            // Re-throw the error so BookingEditDialog knows to keep the modal open
+                            throw error;
+                        }
+                    }}
                 />
             )}
         </div>

@@ -2,9 +2,10 @@ import { StateCreator, create } from "zustand";
 import { devtools, persist } from 'zustand/middleware';
 import { Job } from "../../interfaces/job.interface.ts";
 import { JobService } from "../../services/job.service.ts";
+import { PartItemService } from "../../services/part-item.service.ts";
 import { PartItem } from "../../interfaces/partItem.interface.ts";
 import { toast } from "sonner";
-import { Booking, BookingResponse, BookingRequest } from "../../interfaces/booking.interface.ts";
+import { Booking, BookingResponse, BookingRequest, BookingUpdateRequest } from "../../interfaces/booking.interface.ts";
 import { useAuthStore } from "../auth/auth.store"; // Import auth store
 
 // Define interface for JobResponse (Maybe remove if not used elsewhere, or refine)
@@ -20,6 +21,7 @@ export interface JobState {
     partItems: PartItem[],
     getPartItems: (vin: string, part: string) => void;
     getAllPartItems: () => Promise<PartItem[]>;
+    getCarPartItems: (carId: string) => Promise<PartItem[]>;
     cleanPartItems: () => void;
     getAllJobs: () => void;
     selectedCar: string | null;
@@ -29,7 +31,8 @@ export interface JobState {
     isAdminBookingsFetched: boolean; // Flag for admin fetch
     fetchAdminBookings: () => Promise<void>; // Action for admin fetch
     toggleMechanicAssignment: (bookingId: string, assign: boolean) => Promise<void>;
-    addBooking: (booking: BookingRequest) => void;
+    addBooking: (booking: BookingRequest) => Promise<void>;
+    updateBooking: (id: string, booking: BookingUpdateRequest) => Promise<void>;
     deleteBooking: (id: string) => void;
     initiatePayment: (id: string) => void;
 }
@@ -57,7 +60,7 @@ const storeApi: StateCreator<JobState> = (set, get) => ({
     },
     getAllPartItems: async () => {
         try {
-            const res = await JobService.getAllPartItems();
+            const res = await PartItemService.getAllPartItems();
             const itemsArray = res.responseObject;
 
             set({ partItems: itemsArray });
@@ -225,8 +228,47 @@ const storeApi: StateCreator<JobState> = (set, get) => ({
             console.error("Error assigning/unassigning mechanic:", error);
             toast.error("Failed to update mechanic assignment");
         }
-    }
+    },
+    getCarPartItems: async (carId: string) => {
+        try {
+            const res = await PartItemService.getCarPartItems(carId);
+            const itemsArray = res.responseObject;
 
+            set({ partItems: itemsArray });
+            return itemsArray;
+        } catch (error) {
+            toast.error("Error getting car part items");
+            throw new Error("Error getting car part items");
+        }
+    },
+    updateBooking: async (id: string, booking: BookingUpdateRequest) => {
+        try {
+            const res = await JobService.updateBooking(id, booking);
+            const updatedBooking = Array.isArray(res.responseObject)
+                ? res.responseObject[0]
+                : res.responseObject;
+
+            if (!updatedBooking) {
+                throw new Error("Invalid booking data received from API");
+            }
+
+            if (res.message) {
+                toast.success(res.message);
+            } else {
+                toast.success("Booking updated successfully");
+            }
+
+            set(state => ({
+                bookings: state.bookings.map(b => 
+                    b.id === id ? updatedBooking : b
+                )
+            }));
+
+        } catch (error) {
+            console.error("Error updating booking in store:", error);
+            throw new Error("Error updating booking");
+        }
+    }
 });
 
 export const useJobStore = create<JobState>()(
