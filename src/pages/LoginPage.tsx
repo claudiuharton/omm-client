@@ -64,34 +64,11 @@ export const LoginPage = () => {
     }));
   }
 
-  const handleDemoLogin = () => {
-    setCredentials({
-      email: "demo@example.com",
-      password: "password123"
-    });
-
-    // Toast to let users know we're using demo mode
-    toast.info("Using demo credentials. Backend API is not required for demo mode.");
-  };
-
   return (
     <>
       <h2 className="text-xl md:text-2xl font-bold leading-tight mt-12 text-gray-600 uppercase">
         Log In
       </h2>
-
-      {/* Demo mode notice */}
-      <div className="mt-4 bg-blue-50 p-3 rounded-md">
-        <p className="text-blue-700 text-sm">
-          <strong>Note:</strong> You can use any email/password. The app will work in demo mode if the backend is unavailable.
-        </p>
-        <button
-          onClick={handleDemoLogin}
-          className="mt-2 text-sm bg-blue-500 hover:bg-blue-600 text-white py-1 px-3 rounded"
-        >
-          Fill Demo Credentials
-        </button>
-      </div>
 
       {/* Login status message */}
       {loginStatus && (
