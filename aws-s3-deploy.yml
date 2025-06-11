@@ -1,0 +1,195 @@
+apiVersion: v1
+kind: AWSDeployment
+metadata:
+  name: harton-digital-frontend
+  labels:
+    app: client-auth-mern-zustand
+    domain: harton.digital
+    version: v1.0.0
+
+spec:
+  aws:
+    region: eu-central-1
+    profile: default
+
+  s3:
+    bucket:
+      name: harton.digital
+      region: eu-central-1
+      websiteConfiguration:
+        indexDocument: index.html
+        errorDocument: index.html
+      corsConfiguration:
+        corsRules:
+          - allowedOrigins:
+              ["https://harton.digital", "https://www.harton.digital"]
+            allowedMethods: ["GET", "HEAD"]
+            allowedHeaders: ["*"]
+            maxAgeSeconds: 3600
+      publicAccessBlock:
+        blockPublicAcls: false
+        blockPublicPolicy: false
+        ignorePublicAcls: false
+        restrictPublicBuckets: false
+      bucketPolicy: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "PublicReadGetObject",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::harton.digital/*"
+            }
+          ]
+        }
+
+  cloudfront:
+    distribution:
+      aliases:
+        - harton.digital
+        - www.harton.digital
+      defaultRootObject: index.html
+      priceClass: PriceClass_100
+      enabled: true
+      httpVersion: http2
+      origins:
+        - domainName: harton.digital.s3-website.eu-central-1.amazonaws.com
+          id: S3-harton.digital
+          customOriginConfig:
+            httpPort: 80
+            httpsPort: 443
+            originProtocolPolicy: http-only
+      defaultCacheBehavior:
+        targetOriginId: S3-harton.digital
+        viewerProtocolPolicy: redirect-to-https
+        allowedMethods: ["GET", "HEAD", "OPTIONS"]
+        cachedMethods: ["GET", "HEAD"]
+        compress: true
+        cachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingOptimized
+        responseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03 # Managed-SecurityHeadersPolicy
+      customErrorResponses:
+        - errorCode: 403
+          responseCode: 200
+          responsePagePath: /index.html
+          errorCachingMinTtl: 300
+        - errorCode: 404
+          responseCode: 200
+          responsePagePath: /index.html
+          errorCachingMinTtl: 300
+      viewerCertificate:
+        acmCertificateArn: # Will be set via environment variable
+        sslSupportMethod: sni-only
+        minimumProtocolVersion: TLSv1.2_2021
+
+  route53:
+    hostedZone:
+      name: harton.digital
+    recordSets:
+      - name: harton.digital
+        type: A
+        aliasTarget:
+          dnsName: # CloudFront distribution domain name
+          hostedZoneId: Z2FDTNDATAQYW2 # CloudFront hosted zone ID
+          evaluateTargetHealth: false
+      - name: www.harton.digital
+        type: A
+        aliasTarget:
+          dnsName: # CloudFront distribution domain name
+          hostedZoneId: Z2FDTNDATAQYW2 # CloudFront hosted zone ID
+          evaluateTargetHealth: false
+
+  build:
+    commands:
+      - npm ci
+      - npm run build
+    outputDir: dist
+    artifacts:
+      - "**/*"
+    excludePatterns:
+      - node_modules/**
+      - .git/**
+      - src/**
+      - public/**
+      - "*.md"
+      - package*.json
+      - tsconfig*.json
+      - vite.config.ts
+      - tailwind.config.js
+      - postcss.config.js
+
+  deployment:
+    strategy: blue-green
+    rollbackOnFailure: true
+    steps:
+      - name: build
+        action: build
+      - name: upload-to-s3
+        action: s3-sync
+        params:
+          bucket: harton.digital
+          localDir: dist
+          delete: true
+          exactTimestamps: true
+          cacheControl:
+            - pattern: "*.js,*.css,*.png,*.jpg,*.jpeg,*.gif,*.ico,*.svg,*.woff,*.woff2"
+              value: "public, max-age=31536000, immutable"
+            - pattern: "*.html"
+              value: "public, max-age=0, must-revalidate"
+      - name: invalidate-cloudfront
+        action: cloudfront-invalidation
+        params:
+          distributionId: # Will be set via environment variable
+          paths: ["/*"]
+
+  monitoring:
+    cloudwatch:
+      enabled: true
+      namespace: HartonDigital/Frontend
+      metrics:
+        - name: RequestCount
+          source: cloudfront
+        - name: BytesDownloaded
+          source: cloudfront
+        - name: OriginLatency
+          source: cloudfront
+        - name: ErrorRate
+          source: cloudfront
+      alarms:
+        - name: HighErrorRate
+          metric: ErrorRate
+          threshold: 5
+          comparisonOperator: GreaterThanThreshold
+          evaluationPeriods: 2
+          period: 300
+          statistic: Average
+          treatMissingData: notBreaching
+
+  security:
+    waf:
+      enabled: true
+      webAclArn: # Optional WAF WebACL ARN
+    headers:
+      contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://api.harton.digital wss://api.harton.digital"
+      strictTransportSecurity: "max-age=31536000; includeSubDomains"
+      xFrameOptions: "SAMEORIGIN"
+      xContentTypeOptions: "nosniff"
+      referrerPolicy: "strict-origin-when-cross-origin"
+
+  environment:
+    production:
+      REACT_APP_API_URL: https://api.harton.digital
+      REACT_APP_ENVIRONMENT: production
+    staging:
+      REACT_APP_API_URL: https://staging-api.harton.digital
+      REACT_APP_ENVIRONMENT: staging
+
+  backup:
+    enabled: true
+    retention: 30
+    schedule: "0 2 * * *"
+    crossRegionReplication:
+      enabled: true
+      destinationBucket: harton.digital-backup
+      destinationRegion: eu-west-1

@@ -1,0 +1,134 @@
+{
+  "CallerReference": "harton-digital-distribution-{{timestamp}}",
+  "Aliases": {
+    "Quantity": 2,
+    "Items": ["harton.digital", "www.harton.digital"]
+  },
+  "DefaultRootObject": "index.html",
+  "Comment": "CloudFront distribution for harton.digital React app",
+  "Enabled": true,
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "S3-harton.digital",
+        "DomainName": "harton.digital.s3-website.eu-central-1.amazonaws.com",
+        "CustomOriginConfig": {
+          "HTTPPort": 80,
+          "HTTPSPort": 443,
+          "OriginProtocolPolicy": "http-only",
+          "OriginSslProtocols": {
+            "Quantity": 1,
+            "Items": ["TLSv1.2"]
+          }
+        }
+      }
+    ]
+  },
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "S3-harton.digital",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "MinTTL": 0,
+    "ForwardedValues": {
+      "QueryString": false,
+      "Cookies": {
+        "Forward": "none"
+      },
+      "Headers": {
+        "Quantity": 0
+      }
+    },
+    "TrustedSigners": {
+      "Enabled": false,
+      "Quantity": 0
+    },
+    "Compress": true,
+    "AllowedMethods": {
+      "Quantity": 3,
+      "Items": ["GET", "HEAD", "OPTIONS"],
+      "CachedMethods": {
+        "Quantity": 2,
+        "Items": ["GET", "HEAD"]
+      }
+    }
+  },
+  "CacheBehaviors": {
+    "Quantity": 2,
+    "Items": [
+      {
+        "PathPattern": "*.js",
+        "TargetOriginId": "S3-harton.digital",
+        "ViewerProtocolPolicy": "redirect-to-https",
+        "MinTTL": 31536000,
+        "ForwardedValues": {
+          "QueryString": false,
+          "Cookies": {
+            "Forward": "none"
+          }
+        },
+        "TrustedSigners": {
+          "Enabled": false,
+          "Quantity": 0
+        },
+        "Compress": true,
+        "AllowedMethods": {
+          "Quantity": 2,
+          "Items": ["GET", "HEAD"]
+        }
+      },
+      {
+        "PathPattern": "*.css",
+        "TargetOriginId": "S3-harton.digital",
+        "ViewerProtocolPolicy": "redirect-to-https",
+        "MinTTL": 31536000,
+        "ForwardedValues": {
+          "QueryString": false,
+          "Cookies": {
+            "Forward": "none"
+          }
+        },
+        "TrustedSigners": {
+          "Enabled": false,
+          "Quantity": 0
+        },
+        "Compress": true,
+        "AllowedMethods": {
+          "Quantity": 2,
+          "Items": ["GET", "HEAD"]
+        }
+      }
+    ]
+  },
+  "CustomErrorResponses": {
+    "Quantity": 2,
+    "Items": [
+      {
+        "ErrorCode": 403,
+        "ResponsePagePath": "/index.html",
+        "ResponseCode": "200",
+        "ErrorCachingMinTTL": 300
+      },
+      {
+        "ErrorCode": 404,
+        "ResponsePagePath": "/index.html",
+        "ResponseCode": "200",
+        "ErrorCachingMinTTL": 300
+      }
+    ]
+  },
+  "ViewerCertificate": {
+    "CloudFrontDefaultCertificate": false,
+    "ACMCertificateArn": "{{SSL_CERTIFICATE_ARN}}",
+    "SSLSupportMethod": "sni-only",
+    "MinimumProtocolVersion": "TLSv1.2_2021"
+  },
+  "Restrictions": {
+    "GeoRestriction": {
+      "RestrictionType": "none",
+      "Quantity": 0
+    }
+  },
+  "HttpVersion": "http2",
+  "IsIPV6Enabled": true,
+  "PriceClass": "PriceClass_100"
+}

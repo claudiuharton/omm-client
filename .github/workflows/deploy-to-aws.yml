@@ -1,0 +1,156 @@
+name: Deploy to AWS S3
+
+on:
+  push:
+    branch:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  NODE_VERSION: "22"
+  AWS_REGION: "eu-central-1" # Frankfurt region
+  DOMAIN_NAME: "harton.digital"
+  S3_BUCKET_NAME: "omm-bucket-s3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # - name: Run TypeScript checks
+      #   run: npm run test:ts
+      # - name: Run linter
+      #   run: npm run lint
+      - name: Build application
+        run: npm run build
+        # env:
+        #   REACT_APP_API_URL: https://api.harton.digital
+        #   REACT_APP_ENVIRONMENT: production
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-files
+          path: dist/
+          retention-days: 1
+
+  deploy-to-aws:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-files
+          path: dist/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to S3
+        run: |
+          aws s3 sync dist/ s3://${{ env.S3_BUCKET_NAME }} --delete --exact-timestamps \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html" \
+            --exclude "service-worker.js" \
+            --exclude "manifest.json"
+
+          # Set cache control for HTML files (no cache)
+          aws s3 sync dist/ s3://${{ env.S3_BUCKET_NAME }} \
+            --cache-control "public, max-age=0, must-revalidate" \
+            --include "*.html" \
+            --include "service-worker.js" \
+            --include "manifest.json"
+
+      - name: Invalidate CloudFront distribution
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+  # deploy-to-ec2:
+  #   needs: build-and-test
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+  #   # Uncomment this job if you want to deploy to EC2 instead of S3/CloudFront
+  #   # Remove the deploy-to-aws job above if using this option
+
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Download build artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: dist-files
+  #         path: dist/
+
+  #     - name: Deploy to EC2
+  #       uses: appleboy/ssh-action@v1.0.3
+  #       with:
+  #         host: ${{ secrets.EC2_HOST }}
+  #         username: ${{ secrets.EC2_USER }}
+  #         key: ${{ secrets.EC2_SSH_KEY }}
+  #         port: ${{ secrets.EC2_PORT }}
+  #         script: |
+  #           # Stop nginx/apache if running
+  #           sudo systemctl stop nginx || true
+
+  #           # Backup current deployment
+  #           sudo rm -rf /var/www/html/backup
+  #           sudo mv /var/www/html /var/www/html/backup || true
+  #           sudo mkdir -p /var/www/html
+
+  #           # Create temp directory for new files
+  #           mkdir -p ~/temp-deploy
+
+  #     - name: Copy files to EC2
+  #       uses: appleboy/scp-action@v0.1.7
+  #       with:
+  #         host: ${{ secrets.EC2_HOST }}
+  #         username: ${{ secrets.EC2_USER }}
+  #         key: ${{ secrets.EC2_SSH_KEY }}
+  #         port: ${{ secrets.EC2_PORT }}
+  #         source: "dist/*"
+  #         target: "~/temp-deploy/"
+  #         strip_components: 1
+
+  #     - name: Complete EC2 deployment
+  #       uses: appleboy/ssh-action@v1.0.3
+  #       with:
+  #         host: ${{ secrets.EC2_HOST }}
+  #         username: ${{ secrets.EC2_USER }}
+  #         key: ${{ secrets.EC2_SSH_KEY }}
+  #         port: ${{ secrets.EC2_PORT }}
+  #         script: |
+  #           # Move files to web directory
+  #           sudo mv ~/temp-deploy/* /var/www/html/
+  #           sudo chown -R www-data:www-data /var/www/html
+  #           sudo chmod -R 755 /var/www/html
+
+  #           # Restart web server
+  #           sudo systemctl start nginx
+  #           sudo systemctl restart nginx
+
+  #           # Clean up
+  #           rm -rf ~/temp-deploy
